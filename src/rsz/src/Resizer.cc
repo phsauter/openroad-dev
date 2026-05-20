@@ -3143,6 +3143,8 @@ void Resizer::resizeSlackPreamble()
 // Run repair_design to repair long wires and max slew, capacitance and fanout
 // violations. Find the slacks, and then undo all changes to the netlist.
 void Resizer::findResizeSlacks(bool run_journal_restore,
+                               bool verbose,
+                               bool use_repair_setup,
                                bool run_repair_timing,
                                float repair_tns_end_percent)
 {
@@ -3170,7 +3172,7 @@ void Resizer::findResizeSlacks(bool run_journal_restore,
                                0.0,
                                0.0,
                                0.0,
-                               false,
+                               verbose,
                                repaired_net_count,
                                slew_violations,
                                cap_violations,
@@ -3190,7 +3192,29 @@ void Resizer::findResizeSlacks(bool run_journal_restore,
     // Fully rebuffer doesn't work with global routing parasitics.
     // TODO: fix the function to understand the parasitics from the global
     // routing.
-    fullyRebuffer(nullptr);
+    if (use_repair_setup) {
+      const std::vector<MoveType> sequence;
+      repairSetup(0.0,      // setup_margin
+                  100.0,    // repair_tns_end_percent
+                  10000,    // max_passes
+                  -1,       // max_iterations
+                  1,        // max_repairs_per_pass
+                  false,    // match_cell_footprint
+                  verbose,  // verbose
+                  sequence,
+                  "",     // phases
+                  false,  // skip_pin_swap
+                  false,  // skip_gate_cloning
+                  false,  // skip_size_down
+                  false,  // skip_buffering
+                  false,  // skip_buffer_removal
+                  false,  // skip_last_gasp
+                  false,  // skip_vt_swap
+                  false   // skip_crit_vt_swap
+      );
+    } else {
+      fullyRebuffer(nullptr);
+    }
   }
 
   if (run_repair_timing) {

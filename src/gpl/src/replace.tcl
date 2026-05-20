@@ -5,6 +5,7 @@ sta::define_cmd_args "global_placement" {\
     [-skip_initial_place]\
     [-force_center_initial_place]\
     [-skip_nesterov_place]\
+    [-verbose]\
     [-timing_driven]\
     [-timing_driven_repair_timing]\
     [-routability_driven]\
@@ -35,6 +36,7 @@ sta::define_cmd_args "global_placement" {\
     [-timing_driven_nets_percentage timing_driven_nets_percentage]\
     [-virtual_cts_max_skew_fraction virtual_cts_max_skew_fraction]\
     [-timing_driven_repair_tns_end_percent timing_driven_repair_tns_end_percent]\
+    [-timing_driven_use_repair_setup]\
     [-pad_left pad_left]\
     [-pad_right pad_right]\
     [-disable_revert_if_diverge]\
@@ -71,6 +73,7 @@ proc global_placement { args } {
       -skip_nesterov_place \
       -timing_driven \
       -timing_driven_repair_timing \
+      -timing_driven_use_repair_setup \
       -routability_driven \
       -virtual_cts \
       -routability_use_grt \
@@ -78,7 +81,8 @@ proc global_placement { args } {
       -incremental \
       -disable_revert_if_diverge \
       -disable_pin_density_adjust \
-      -enable_routing_congestion}
+      -enable_routing_congestion \
+      -verbose}
 
   sta::check_argc_eq0 "global_placement" $args
 

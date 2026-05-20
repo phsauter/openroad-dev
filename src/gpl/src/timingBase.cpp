@@ -122,10 +122,22 @@ void TimingBase::setTimingNetsPercentage(float percentage)
   nets_percentage_ = percentage;
 }
 
+void TimingBase::setTimingDrivenUseRepairSetup(bool use_repair_setup)
+{
+  timing_driven_use_repair_setup_ = use_repair_setup;
+}
+
+void TimingBase::setVerbose(bool verbose)
+{
+  verbose_ = verbose;
+}
+
 bool TimingBase::executeTimingDriven(bool run_journal_restore,
                                      bool enable_repair_timing)
 {
   rs_->findResizeSlacks(run_journal_restore,
+                        verbose_,
+                        timing_driven_use_repair_setup_,
                         (enable_repair_timing && repair_timing_),
                         repair_tns_end_percent_);
 

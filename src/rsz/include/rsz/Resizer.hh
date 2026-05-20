@@ -505,6 +505,8 @@ class Resizer : public sta::dbStaState, public sta::dbNetworkObserver
   // resizeSlackPreamble must be called before the first findResizeSlacks.
   void resizeSlackPreamble();
   void findResizeSlacks(bool run_journal_restore,
+                        bool verbose = false,
+                        bool use_repair_setup = false,
                         bool run_repair_timing = false,
                         float repair_tns_end_percent = 0.01);
   // Return nets with worst slack.
