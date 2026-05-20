@@ -86,6 +86,10 @@ static gpl::PlaceOptions getOptions(
            options.timingDrivenRepairTnsEndPercent);
   checkKey(keys, "-random_seed", options.initialPlacePerturbationSeed);
   checkKey(keys, "-perturb_dist", options.initialPlacePerturbationDist);
+  checkFlag(flags, "-simple_net_weighting", options.simpleNetWeighting);
+  checkKey(keys,
+           "-simple_net_weighting_max_weight",
+           options.simpleNetWeightingMaxWeight);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {

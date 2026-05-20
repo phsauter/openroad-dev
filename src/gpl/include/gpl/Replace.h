@@ -54,6 +54,8 @@ struct PlaceOptions
   float initialPlaceNetWeightScale = 800;
 
   bool verbose = false;
+  bool simpleNetWeighting = false;
+  float simpleNetWeightingMaxWeight = 5;
   bool skipIoMode = false;
   bool forceCenterInitialPlace = false;
   bool timingDrivenMode = false;

@@ -1153,7 +1153,9 @@ std::pair<int, int> BinGrid::getMinMaxIdxY(const Instance* inst) const
 ////////////////////////////////////////////////
 // NesterovBaseVars
 NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
-    : isSetBinCnt(options.binGridCntX != 0 && options.binGridCntY != 0),
+    : simpleNetWeighting(options.simpleNetWeighting),
+      simpleNetWeightingMaxWeight(options.simpleNetWeightingMaxWeight),
+      isSetBinCnt(options.binGridCntX != 0 && options.binGridCntY != 0),
       useUniformTargetDensity(options.uniformTargetDensityMode),
       targetDensity(options.density),
       binCntX(isSetBinCnt ? options.binGridCntX : 0),
@@ -1187,6 +1189,107 @@ NesterovPlaceVars::NesterovPlaceVars(const PlaceOptions& options)
 ////////////////////////////////////////////////
 // NesterovBaseCommon
 ///////////////////////////////////////////////
+
+void NesterovBaseCommon::simpleNetWeighting(std::unordered_map<odb::dbNet*, float>& net_weights)
+{
+  // Phase 1: Collect all start and endpoints -> FFs
+  odb::dbDatabase* db = pbc_->db();
+  std::unordered_set<odb::dbNet*> start_nets; // Output nets
+  std::unordered_set<odb::dbNet*> end_nets; // Input nets
+
+  for (odb::dbInst* db_inst : db->getChip()->getBlock()->getInsts()) {
+    // Check that instance is sequential
+    odb::dbMaster* master = db_inst->getMaster();
+    if (master == nullptr || !master->isSequential()) {
+      continue;
+    }
+
+    // Check all iterms of the instance for outputs and inputs
+    for (odb::dbITerm* iterm : db_inst->getITerms()) {
+      // Ignore unconnected iterms
+      odb::dbNet* net = iterm->getNet();
+      if (net == nullptr) {
+        continue;
+      }
+
+      if (iterm->getIoType() == odb::dbIoType::OUTPUT) {
+        start_nets.insert(net);
+      } else if (iterm->getIoType() == odb::dbIoType::INPUT) {
+        end_nets.insert(net);
+      }
+    }
+  }
+
+  log_->info(GPL, 7770, "Simple net weighting: {} start nets, {} end nets", start_nets.size(), end_nets.size());
+
+  std::unordered_map<odb::dbNet*, size_t> net_depths;
+
+  std::function<void(odb::dbNet*, odb::dbNet*, std::unordered_set<odb::dbNet*>)> traverse;
+  traverse = [&](odb::dbNet* node, odb::dbNet* start, std::unordered_set<odb::dbNet*> path) {
+    if (path.count(node) > 0) {
+      return; // Avoid cycles
+    }
+
+    path.insert(node);
+    // Check if this node is an end net
+    const size_t path_length = path.size();
+    if (end_nets.count(node) > 0 || (net_depths.find(node) != net_depths.end() && net_depths[node] >= path_length)) {
+      // Record the path length
+      const float weight = 1.0f * path_length;
+      for (odb::dbNet* net : path) {
+        if (net_weights.find(net) == net_weights.end()) {
+          net_weights[net] = weight;
+        } else {
+          net_weights[net] = std::max(net_weights[net], weight);
+        }
+      }
+      return;
+    }
+    net_depths[node] = path.size();
+
+    // Check child nets
+    for (odb::dbITerm* iterm : node->getITerms()) {
+      if (iterm->getIoType() != odb::dbIoType::INPUT) {
+        continue;
+      }
+      odb::dbInst* child_inst = iterm->getInst();
+      for (odb::dbITerm* child_iterm : child_inst->getITerms()) {
+        if (child_iterm->getIoType() == odb::dbIoType::OUTPUT) {
+          odb::dbNet* child_net = child_iterm->getNet();
+          if (child_net == nullptr) {
+            continue;
+          }
+          traverse(child_net, start, path);
+        }
+      }
+    }
+  };
+
+  // Phase 2: For each start net, traverse to find all paths to end nets
+  int nets = 0;
+  const int progress_interval = std::max(1, static_cast<int>(start_nets.size() / 100.0f));
+  for (odb::dbNet* start_net : start_nets) {
+    nets++;
+    traverse(start_net, start_net, {});
+    if (nets % progress_interval == 0) {
+      log_->info(GPL, 7780, "Processed {} start nets, current: {}", nets, start_net->getName());
+    }
+  }
+
+  float min_weight = std::numeric_limits<float>::max();
+  float max_weight = 0;
+  for (const auto& [net, weight] : net_weights) {
+    max_weight = std::max(max_weight, weight);
+    min_weight = std::min(min_weight, weight);
+  }
+
+  // Normalize weights to be between 1 and timingNetWeightMax
+  for (const auto& [net, weight] : net_weights) {
+    net_weights[net] = 1.0f + (nbVars_.simpleNetWeightingMaxWeight - 1.0f) * weight / max_weight;
+  }
+
+  log_->info(GPL, 7790, "Max net depth: {}, min net depth: {}, total weighted nets: {}", max_weight, min_weight, net_weights.size());
+}
 
 NesterovBaseCommon::NesterovBaseCommon(
     NesterovBaseVars nbVars,
@@ -1244,10 +1347,23 @@ NesterovBaseCommon::NesterovBaseCommon(
     gPinStor_.push_back(myGPin);
   }
 
+  std::unordered_map<odb::dbNet*, float> net_weights;
+  if (nbVars_.simpleNetWeighting) {
+    simpleNetWeighting(net_weights);
+  }
+
   // gNetStor init
   gNetStor_.reserve(pbc_->getNets().size());
   for (auto& net : pbc_->getNets()) {
     GNet myGNet(net);
+
+    if (nbVars_.simpleNetWeighting) {
+      odb::dbNet* db_net = net->getDbNet();
+      if (net_weights.find(db_net) != net_weights.end()) {
+        myGNet.setTimingWeight(net_weights[db_net]);
+      }
+    }
+
     gNetStor_.push_back(myGNet);
   }
 

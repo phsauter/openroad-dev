@@ -776,6 +776,9 @@ struct NesterovBaseVars
 {
   NesterovBaseVars(const PlaceOptions& options);
 
+  const bool simpleNetWeighting;
+  const float simpleNetWeightingMaxWeight;
+
   const bool isSetBinCnt;
   const bool useUniformTargetDensity;
   bool isMaxPhiCoefChanged = false;  // not user config
@@ -959,6 +962,8 @@ class NesterovBaseCommon
 
   void printGCells();
   void printGPins();
+
+  void simpleNetWeighting(std::unordered_map<odb::dbNet*, float>& net_weights);
 
   // TODO do this for each region? Also, manage this properly if other callbacks
   // are implemented.
