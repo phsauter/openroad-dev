@@ -1159,7 +1159,8 @@ void PlacerBase::init(bool check_density)
       odb::dbGroup* db_inst_group = db_inst->getGroup();
       if (group_ == nullptr) {
         if (db_inst_group
-            && db_inst_group->getType() != odb::dbGroupType::VISUAL_DEBUG) {
+            && db_inst_group->getType() != odb::dbGroupType::VISUAL_DEBUG
+            && db_inst_group->getType() != odb::dbGroupType::PHYSICAL_CLUSTER) {
           continue;
         }
       } else {

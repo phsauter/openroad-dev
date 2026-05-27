@@ -91,6 +91,8 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys,
            "-simple_net_weighting_max_weight",
            options.simpleNetWeightingMaxWeight);
+  checkFlag(flags, "-cluster_net_based", options.clusterNetBased);
+  checkKey(keys, "-cluster_net_based_weight", options.clusterNetBasedWeight);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {

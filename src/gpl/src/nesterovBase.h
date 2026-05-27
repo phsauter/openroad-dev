@@ -789,6 +789,9 @@ struct NesterovBaseVars
   const bool simpleNetWeighting;
   const float simpleNetWeightingMaxWeight;
 
+  const bool clusterNetBased;
+  const float clusterNetBasedWeight;
+
   const bool isSetBinCnt;
   const bool useUniformTargetDensity;
   bool isMaxPhiCoefChanged = false;  // not user config

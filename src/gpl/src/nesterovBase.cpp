@@ -1167,6 +1167,8 @@ std::pair<int, int> BinGrid::getMinMaxIdxY(const Instance* inst) const
 NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
     : simpleNetWeighting(options.simpleNetWeighting),
       simpleNetWeightingMaxWeight(options.simpleNetWeightingMaxWeight),
+      clusterNetBased(options.clusterNetBased),
+      clusterNetBasedWeight(options.clusterNetBasedWeight),
       isSetBinCnt(options.binGridCntX != 0 && options.binGridCntY != 0),
       useUniformTargetDensity(options.uniformTargetDensityMode),
       targetDensity(options.density),
@@ -1366,6 +1368,7 @@ NesterovBaseCommon::NesterovBaseCommon(
 
   // gNetStor init
   gNetStor_.reserve(pbc_->getNets().size());
+  int cluster_nets = 0;
   for (auto& net : pbc_->getNets()) {
     GNet myGNet(net);
 
@@ -1376,8 +1379,41 @@ NesterovBaseCommon::NesterovBaseCommon(
       }
     }
 
+    if (nbVars_.clusterNetBased) {
+      odb::dbGroup* group = nullptr;
+
+      odb::dbNet* db_net = net->getDbNet();
+      bool is_cluster_net = db_net->getITerms().size() > 0;
+      if (db_net != nullptr) {
+        for (odb::dbITerm* iterm : db_net->getITerms()) {
+          odb::dbInst* inst = iterm->getInst();
+          if (inst == nullptr) {
+            continue;
+          }
+          odb::dbGroup* inst_group = inst->getGroup();
+          if (inst_group == nullptr) {
+            continue;
+          }
+          if (group == nullptr) {
+            group = inst_group;
+          } else if (group != inst_group) {
+            is_cluster_net = false;
+            break;
+          }
+        }
+      }
+
+      if (is_cluster_net && group != nullptr) {
+        // all instances connected to the net belong to the same group.
+        myGNet.setCustomWeight(nbVars_.clusterNetBasedWeight);
+        cluster_nets++;
+      }
+    }
+
     gNetStor_.push_back(myGNet);
   }
+
+  log_->info(GPL, 4444, "Total nets: {}, cluster nets: {}", gNetStor_.size(), cluster_nets);
 
   // gCell ptr init
   nbc_gcells_.reserve(gCellStor_.size());

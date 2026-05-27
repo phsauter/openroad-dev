@@ -64,8 +64,8 @@ class MacroPlacer
              float min_ar,
              const char* report_directory,
              bool keep_clustering_data,
-             bool use_full_halo);
-
+             bool use_full_halo,
+             bool skip_macro_placement);
   void blockMacroChannels();
 
   void placeMacro(odb::dbInst* inst,

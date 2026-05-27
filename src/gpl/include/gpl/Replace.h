@@ -53,6 +53,8 @@ struct PlaceOptions
   int initialPlaceMaxFanout = 200;
   float initialPlaceNetWeightScale = 800;
 
+  bool clusterNetBased = false;
+  float clusterNetBasedWeight = 10;
   bool verbose = false;
   bool simpleNetWeighting = false;
   float simpleNetWeightingMaxWeight = 5;
