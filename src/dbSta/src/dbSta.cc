@@ -310,11 +310,13 @@ class DbStaLevelizeObserver : public StaLevelizeObserver
   {
     StaLevelizeObserver::levelsChangedBefore();
     sta_->invalidateLevelizedDrvrVertices();
+    sta_->invalidateLevelizedLoadVertices();
   }
   void levelChangedBefore(Vertex* vertex) override
   {
     StaLevelizeObserver::levelChangedBefore(vertex);
     sta_->invalidateLevelizedDrvrVertices();
+    sta_->invalidateLevelizedLoadVertices();
   }
 
  private:
@@ -362,6 +364,42 @@ const VertexSeq& dbSta::levelizedDrvrVertices()
     drvr_vertices_level_valid_ = true;
   }
   return levelized_drvr_vertices_;
+}
+
+void dbSta::invalidateLevelizedLoadVertices()
+{
+  if (load_vertices_level_valid_) {
+    load_vertices_level_valid_ = false;
+    levelized_load_vertices_.clear();
+  }
+}
+
+const VertexSeq& dbSta::levelizedLoadVertices()
+{
+  ensureLevelized();
+  if (!load_vertices_level_valid_) {
+    Graph* g = graph();
+    // Approx half of vertices are loads.
+    levelized_load_vertices_.reserve(g->vertexCount() / 2);
+    Network* net = network();
+    VertexIterator vertex_iter(g);
+    while (vertex_iter.hasNext()) {
+      Vertex* vertex = vertex_iter.next();
+      if (!vertex->isDriver(net)) {
+        levelized_load_vertices_.push_back(vertex);
+      }
+    }
+    VertexNameLess name_less(net);
+    std::ranges::sort(levelized_load_vertices_,
+                      [&name_less](const Vertex* a, const Vertex* b) {
+                        if (a->level() != b->level()) {
+                          return a->level() < b->level();
+                        }
+                        return name_less(a, b);
+                      });
+    load_vertices_level_valid_ = true;
+  }
+  return levelized_load_vertices_;
 }
 
 void dbSta::postReadLef(odb::dbTech* tech, odb::dbLib* library)
@@ -1196,6 +1234,7 @@ void dbStaCbk::inDbInstCreate(odb::dbInst* inst)
   sta_->makeInstanceAfter(network_->dbToSta(inst));
   // New driver vertices may exist; invalidate cached driver-vertex list.
   sta_->invalidateLevelizedDrvrVertices();
+  sta_->invalidateLevelizedLoadVertices();
 }
 
 void dbStaCbk::inDbInstDestroy(odb::dbInst* inst)
@@ -1210,6 +1249,7 @@ void dbStaCbk::inDbInstDestroy(odb::dbInst* inst)
   // directly (bypassing the LevelizeObserver), so the dbSta cache must be
   // invalidated explicitly here to avoid a dangling Vertex* on next query.
   sta_->invalidateLevelizedDrvrVertices();
+  sta_->invalidateLevelizedLoadVertices();
 }
 
 void dbStaCbk::inDbPostInstRename(odb::dbInst* inst, const char* /*old_name*/)

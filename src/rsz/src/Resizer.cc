@@ -3269,6 +3269,21 @@ void Resizer::findResizeSlacks1()
       net_slack_map_[net] = sta_->slack(drvr, max_);
     }
   }
+
+  load_pin_slack_map_.clear();
+  const sta::VertexSeq& loads = sta_->levelizedLoadVertices();
+  for (int i = loads.size() - 1; i >= 0; i--) {
+    sta::Vertex* load = loads[i];
+    sta::Pin* load_pin = load->pin();
+    sta::Net* net = db_network_->dbToSta(db_network_->flatNet(load_pin));
+    if (net
+        && !sta_->isConstant(load_pin, sta_->cmdMode())
+        // Hands off special nets.
+        && !db_network_->isSpecial(net)
+        && !sta_->isClock(load_pin, sta_->cmdMode())) {
+      load_pin_slack_map_[load_pin] = sta_->slack(load, max_);
+    }
+  }
 }
 
 sta::NetSeq Resizer::resizeWorstSlackNets()
@@ -3313,6 +3328,45 @@ std::optional<sta::Slack> Resizer::resizeNetSlack(const odb::dbNet* db_net)
 {
   const sta::Net* net = db_network_->dbToSta(db_net);
   return resizeNetSlack(net);
+}
+
+sta::PinSeq Resizer::resizeWorstSlackPins()
+{
+  // Find the pins with the worst slack.
+  sta::PinSeq pins;
+  for (auto& pair : load_pin_slack_map_) {
+    pins.push_back(pair.first);
+  }
+  // We are manually breaking ties to enforce stability, so use std::sort since
+  // there is no need to pay the cost for stable sorting here
+  std::ranges::sort(pins, [this](const sta::Pin* pin1, const sta::Pin* pin2) {
+    auto slack1 = resizePinSlack(pin1);
+    auto slack2 = resizePinSlack(pin2);
+    if (slack1 != slack2) {
+      return slack1 < slack2;
+    }
+
+    // In the event of a tie use ID to keep the sort stable.
+    auto dbpin1 = db_network_->staToDb(pin1);
+    auto dbpin2 = db_network_->staToDb(pin2);
+    return dbpin1->getId() < dbpin2->getId();
+  });
+
+  int nworst_pins = std::ceil(pins.size() * worst_slack_nets_percent_ / 100.0);
+  if (pins.size() > nworst_pins) {
+    pins.resize(nworst_pins);
+  }
+
+  return pins;
+}
+
+std::optional<sta::Slack> Resizer::resizePinSlack(const sta::Pin* pin)
+{
+  auto it = load_pin_slack_map_.find(pin);
+  if (it == load_pin_slack_map_.end()) {
+    return {};
+  }
+  return it->second;
 }
 
 ////////////////////////////////////////////////////////////////

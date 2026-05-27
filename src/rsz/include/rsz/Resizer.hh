@@ -514,6 +514,10 @@ class Resizer : public sta::dbStaState, public sta::dbNetworkObserver
   // Return net slack, if any (indicated by the bool).
   std::optional<sta::Slack> resizeNetSlack(const sta::Net* net);
   std::optional<sta::Slack> resizeNetSlack(const odb::dbNet* db_net);
+  // Return pins with worst slack.
+  sta::PinSeq resizeWorstSlackPins();
+  // Return pin slack, if any (indicated by the bool).
+  std::optional<sta::Slack> resizePinSlack(const sta::Pin* pin);
 
   ////////////////////////////////////////////////////////////////
   // API for logic resynthesis
@@ -1023,6 +1027,7 @@ class Resizer : public sta::dbStaState, public sta::dbNetworkObserver
   float max_wire_length_ = 0;
   float worst_slack_nets_percent_ = 10;
   std::map<const sta::Net*, sta::Slack> net_slack_map_;
+  std::map<const sta::Pin*, sta::Slack> load_pin_slack_map_;
 
   std::unordered_map<sta::LibertyCell*, std::optional<float>>
       cell_leakage_cache_;

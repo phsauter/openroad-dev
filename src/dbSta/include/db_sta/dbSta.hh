@@ -232,10 +232,12 @@ class dbSta : public Sta, public odb::dbDatabaseObserver
 
   // Drivers sorted by (level, name) for determinism.
   const VertexSeq& levelizedDrvrVertices();
+  const VertexSeq& levelizedLoadVertices();
   // Discard the cached driver-vertex list. Callers that mutate the timing
   // graph outside the LevelizeObserver path (e.g. dbStaCbk on dbInst
   // create/destroy) must invalidate so the next query rebuilds.
   void invalidateLevelizedDrvrVertices();
+  void invalidateLevelizedLoadVertices();
 
  private:
   void makeReport() override;
@@ -257,6 +259,8 @@ class dbSta : public Sta, public odb::dbDatabaseObserver
 
   VertexSeq levelized_drvr_vertices_;
   bool drvr_vertices_level_valid_ = false;
+  VertexSeq levelized_load_vertices_;
+  bool load_vertices_level_valid_ = false;
 };
 
 }  // namespace sta

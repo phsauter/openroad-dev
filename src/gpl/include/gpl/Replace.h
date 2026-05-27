@@ -62,6 +62,7 @@ struct PlaceOptions
   bool timingDrivenRepairTiming = false;
   float timingDrivenRepairTnsEndPercent = 1.0;
   bool timingDrivenUseRepairSetup = false;
+  bool timingDrivenPinBased = false;
   bool routabilityDrivenMode = false;
   bool uniformTargetDensityMode = false;
   std::vector<int> timingNetWeightOverflows{64, 20};

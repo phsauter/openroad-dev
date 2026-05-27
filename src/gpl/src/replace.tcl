@@ -37,6 +37,7 @@ sta::define_cmd_args "global_placement" {\
     [-virtual_cts_max_skew_fraction virtual_cts_max_skew_fraction]\
     [-timing_driven_repair_tns_end_percent timing_driven_repair_tns_end_percent]\
     [-timing_driven_use_repair_setup]\
+    [-timing_driven_pin_based]\
     [-pad_left pad_left]\
     [-pad_right pad_right]\
     [-disable_revert_if_diverge]\
@@ -77,6 +78,7 @@ proc global_placement { args } {
       -timing_driven \
       -timing_driven_repair_timing \
       -timing_driven_use_repair_setup \
+      -timing_driven_pin_based \
       -routability_driven \
       -virtual_cts \
       -routability_use_grt \

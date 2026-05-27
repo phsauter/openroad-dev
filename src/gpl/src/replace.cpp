@@ -321,6 +321,7 @@ bool Replace::initNesterovPlace(const PlaceOptions& options,
     tb_->setRepairTnsEndPercent(options.timingDrivenRepairTnsEndPercent);
     tb_->setTimingDrivenUseRepairSetup(options.timingDrivenUseRepairSetup);
     tb_->setVerbose(options.verbose);
+    tb_->setTimingDrivenPinBased(options.timingDrivenPinBased);
   }
 
   if (!cb_ && options.virtualCtsMode) {

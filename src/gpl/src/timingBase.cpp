@@ -132,6 +132,11 @@ void TimingBase::setVerbose(bool verbose)
   verbose_ = verbose;
 }
 
+void TimingBase::setTimingDrivenPinBased(bool pin_based)
+{
+  pin_based_ = pin_based;
+}
+
 bool TimingBase::executeTimingDriven(bool run_journal_restore,
                                      bool enable_repair_timing)
 {
@@ -145,8 +150,80 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore,
     nbc_->fixPointers();
   }
 
-  // get worst resize nets
   rs_->setWorstSlackNetsPercent(nets_percentage_);
+  if (pin_based_) {
+    sta::PinSeq worst_slack_pins = rs_->resizeWorstSlackPins();
+
+    if (worst_slack_pins.empty()) {
+      log_->warn(
+          GPL,
+          8880,
+          "Timing-driven: no pin slacks found. Timing-driven mode disabled.");
+      return false;
+    }
+
+    // min/max slack for worst pins
+    auto slack_min = rs_->resizePinSlack(worst_slack_pins[0]).value();
+    auto slack_max
+        = rs_->resizePinSlack(worst_slack_pins[worst_slack_pins.size() - 1])
+              .value();
+
+    log_->info(GPL, 8881, "Timing-driven: worst slack {}", slack_min);
+
+    if (sta::fuzzyInf(slack_min)) {
+      log_->warn(
+          GPL,
+          8882,
+          "Timing-driven: no slacks found. Timing-driven mode disabled.");
+      return false;
+    }
+
+    // Default weight
+    for (auto& gNet : nbc_->getGNets()) {
+      gNet->setTimingWeight(1.0);
+      for (auto& gPin : gNet->getGPins()) {
+        gPin->setTimingWeight(1.0);
+      }
+    }
+
+    int weighted_pin_count = 0;
+    for (auto& gPin : nbc_->getGPins()) {
+      sta::Pin* sta_pin
+          = rs_->dbNetwork()->dbToSta(gPin->getPbPin()->getDbITerm());
+      auto pin_slack_opt = rs_->resizePinSlack(sta_pin);
+      if (!pin_slack_opt) {
+        continue;
+      }
+      auto pin_slack = pin_slack_opt.value();
+      if (pin_slack < slack_max) {
+        if (slack_max == slack_min) {
+          gPin->setTimingWeight(1.0);
+        } else {
+          // weight(min_slack) = net_weight_max_
+          // weight(max_slack) = 1
+          const float weight = 1
+                               + (net_weight_max_ - 1) * (slack_max - pin_slack)
+                                     / (slack_max - slack_min);
+          gPin->setTimingWeight(weight);
+        }
+        weighted_pin_count++;
+      }
+      debugPrint(log_,
+                 GPL,
+                 "timing",
+                 1,
+                 "pin:{} slack:{} weight:{}",
+                 gPin->getPbPin()->getDbITerm()->getName(),
+                 pin_slack,
+                 gPin->getTotalWeight());
+    }
+
+    log_->info(
+        GPL, 8883, "Timing-driven: weighted {} pins.", weighted_pin_count);
+
+    return true;
+  }
+  // get worst resize nets
   sta::NetSeq worst_slack_nets = rs_->resizeWorstSlackNets();
 
   if (worst_slack_nets.empty()) {
@@ -175,6 +252,9 @@ bool TimingBase::executeTimingDriven(bool run_journal_restore,
   int weighted_net_count = 0;
   for (auto& gNet : nbc_->getGNets()) {
     // default weight
+    for (auto& gPin : gNet->getGPins()) {
+      gPin->setTimingWeight(1.0);
+    }
     gNet->setTimingWeight(1.0);
     if (gNet->getGPins().size() > 1) {
       auto net_slack_opt = rs_->resizeNetSlack(gNet->getPbNet()->getDbNet());

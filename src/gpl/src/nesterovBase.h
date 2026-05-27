@@ -508,10 +508,20 @@ class GPin
   void print(utl::Logger* log) const;
   void updateCoordi();
 
+  void setTimingWeight(float timingWeight);
+  void setCustomWeight(float customWeight);
+
+  float getTotalWeight() const { return timingWeight_ * customWeight_; }
+  float getTimingWeight() const { return timingWeight_; }
+  float getCustomWeight() const { return customWeight_; }
+
  private:
   GCell* gCell_ = nullptr;
   GNet* gNet_ = nullptr;
   std::vector<Pin*> pins_;
+
+  float timingWeight_ = 1;
+  float customWeight_ = 1;
 
   int offsetCx_ = 0;
   int offsetCy_ = 0;

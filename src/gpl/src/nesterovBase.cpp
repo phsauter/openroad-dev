@@ -523,6 +523,16 @@ void GPin::updateCoordi()
   offsetCy_ = pb_pin->getOffsetCy();
 }
 
+void GPin::setTimingWeight(float timingWeight)
+{
+  timingWeight_ = timingWeight;
+}
+
+void GPin::setCustomWeight(float customWeight)
+{
+  customWeight_ = customWeight;
+}
+
 void GPin::print(utl::Logger* log) const
 {
   if (getPbPin()->getDbITerm() != nullptr) {
@@ -545,6 +555,8 @@ void GPin::print(utl::Logger* log) const
   log->report("offsetCy_: {}", offsetCy_);
   log->report("cx_: {}", cx_);
   log->report("cy_: {}", cy_);
+  log->report("timingWeight_: {}", timingWeight_);
+  log->report("customWeight_: {}", customWeight_);
   log->report("maxExpSumX_: {}", maxExpSumX_);
   log->report("maxExpSumY_: {}", maxExpSumY_);
   log->report("minExpSumX_: {}", minExpSumX_);
@@ -1663,8 +1675,8 @@ FloatPoint NesterovBaseCommon::getWireLengthGradientWA(const GCell* gCell,
                tmpPair.y);
 
     // apply timing/custom net weight
-    tmpPair.x *= gPin->getGNet()->getTotalWeight();
-    tmpPair.y *= gPin->getGNet()->getTotalWeight();
+    tmpPair.x *= gPin->getGNet()->getTotalWeight() * gPin->getTotalWeight();
+    tmpPair.y *= gPin->getGNet()->getTotalWeight() * gPin->getTotalWeight();
 
     gradientPair.x += tmpPair.x;
     gradientPair.y += tmpPair.y;
