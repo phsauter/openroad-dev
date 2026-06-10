@@ -47,6 +47,10 @@ sta::define_cmd_args "global_placement" {\
     [-enable_routing_congestion]\
     [-cluster_net_based]\
     [-cluster_net_based_weight cluster_net_based_weight]\
+    [-pulsed_placement]\
+    [-pulsed_placement_overflow pulsed_placement_overflow]\
+    [-pulsed_placement_iterations pulsed_placement_iterations]\
+    [-pulsed_placement_weight_factor pulsed_placement_weight_factor]\
     [-simple_net_weighting]\
     [-simple_net_weighting_max_weight simple_net_weighting_max_weight]
 }
@@ -74,7 +78,10 @@ proc global_placement { args } {
       -perturb_dist \
       -pad_left -pad_right \
       -simple_net_weighting_max_weight \
-      -cluster_net_based_weight} \
+      -cluster_net_based_weight \
+      -pulsed_placement_overflow \
+      -pulsed_placement_iterations \
+      -pulsed_placement_weight_factor } \
     flags {-skip_initial_place \
       -force_center_initial_place \
       -skip_nesterov_place \
@@ -92,7 +99,8 @@ proc global_placement { args } {
       -enable_routing_congestion \
       -verbose \
       -cluster_net_based\
-      -simple_net_weighting }
+      -simple_net_weighting \
+      -pulsed_placement }
 
   sta::check_argc_eq0 "global_placement" $args
 

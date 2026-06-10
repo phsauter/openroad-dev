@@ -94,6 +94,11 @@ static gpl::PlaceOptions getOptions(
   checkFlag(flags, "-cluster_net_based", options.clusterNetBased);
   checkKey(keys, "-cluster_net_based_weight", options.clusterNetBasedWeight);
 
+  checkFlag(flags, "-pulsed_placement", options.pulsedPlacement);
+  checkKey(keys, "-pulsed_placement_overflow", options.pulsedPlacementOverflow);
+  checkKey(keys, "-pulsed_placement_iterations", options.pulsedPlacementIterations);
+  checkKey(keys, "-pulsed_placement_weight_factor", options.pulsedPlacementWeightFactor);
+
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {
       options.uniformTargetDensityMode = true;

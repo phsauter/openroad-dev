@@ -1165,7 +1165,11 @@ std::pair<int, int> BinGrid::getMinMaxIdxY(const Instance* inst) const
 ////////////////////////////////////////////////
 // NesterovBaseVars
 NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
-    : simpleNetWeighting(options.simpleNetWeighting),
+    : pulsedPlacement(options.pulsedPlacement),
+      pulsedPlacementOverflow(options.pulsedPlacementOverflow),
+      pulsedPlacementIterations(options.pulsedPlacementIterations),
+      pulsedPlacementWeightFactor(options.pulsedPlacementWeightFactor),
+      simpleNetWeighting(options.simpleNetWeighting),
       simpleNetWeightingMaxWeight(options.simpleNetWeightingMaxWeight),
       clusterNetBased(options.clusterNetBased),
       clusterNetBasedWeight(options.clusterNetBasedWeight),

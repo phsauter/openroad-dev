@@ -1091,6 +1091,11 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
   // Core Nesterov Loop
   int nesterov_iter = start_iter;
+  const bool pulsed_placement_enabled = nbc_->getNbVars().pulsedPlacement;
+  const bool pulsed_placement_overflow = nbc_->getNbVars().pulsedPlacementOverflow;
+  const float pulsed_placement_weight_factor = nbc_->getNbVars().pulsedPlacementWeightFactor;
+  int pulsed_iter = nbc_->getNbVars().pulsedPlacementIterations;
+  int pulsed_test_iter = 0;
   for (; nesterov_iter < npVars_.maxNesterovIter; nesterov_iter++) {
     const float prevA = curA;
 
@@ -1127,6 +1132,18 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     if (is_routability_gpl_iter) {
       ++routability_gpl_iter_count_;
       ++npVars_.maxNesterovIter;
+    }
+
+    pulsed_test_iter++;
+    if (pulsed_placement_enabled &&
+        average_overflow_unscaled_ < pulsed_placement_overflow &&
+        pulsed_iter > 0 && pulsed_test_iter > 50) {
+      log_->info(GPL, 1000, "Test iteration");
+      for (auto& gNet : nbc_->getGNets()) {
+        gNet->setCustomWeight(gNet->getCustomWeight() * pulsed_placement_weight_factor);
+      }
+      pulsed_iter--;
+      pulsed_test_iter = 0;
     }
 
     runTimingDriven(nesterov_iter,

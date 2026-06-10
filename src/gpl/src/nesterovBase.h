@@ -786,6 +786,11 @@ struct NesterovBaseVars
 {
   NesterovBaseVars(const PlaceOptions& options);
 
+  const bool pulsedPlacement;
+  const float pulsedPlacementOverflow;
+  const int pulsedPlacementIterations;
+  const float pulsedPlacementWeightFactor;
+
   const bool simpleNetWeighting;
   const float simpleNetWeightingMaxWeight;
 
