@@ -1169,6 +1169,7 @@ NesterovBaseVars::NesterovBaseVars(const PlaceOptions& options)
       pulsedPlacementOverflow(options.pulsedPlacementOverflow),
       pulsedPlacementIterations(options.pulsedPlacementIterations),
       pulsedPlacementWeightFactor(options.pulsedPlacementWeightFactor),
+      pulsedPlacementEndWeightFactor(options.pulsedPlacementEndWeightFactor),
       simpleNetWeighting(options.simpleNetWeighting),
       simpleNetWeightingMaxWeight(options.simpleNetWeightingMaxWeight),
       clusterNetBased(options.clusterNetBased),

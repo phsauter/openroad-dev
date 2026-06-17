@@ -98,6 +98,7 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-pulsed_placement_overflow", options.pulsedPlacementOverflow);
   checkKey(keys, "-pulsed_placement_iterations", options.pulsedPlacementIterations);
   checkKey(keys, "-pulsed_placement_weight_factor", options.pulsedPlacementWeightFactor);
+  checkKey(keys, "-pulsed_placement_end_weight_factor", options.pulsedPlacementEndWeightFactor);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {
