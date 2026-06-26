@@ -156,6 +156,7 @@ class GraphicsImpl : public gpl::AbstractGraphics,
   void drawCells(const std::vector<GCellHandle>& cells,
                  gui::Painter& painter,
                  size_t nb_index);
+  gui::Painter::Color getInstanceColor(const GCell* gCell, size_t nb_index);
   void drawSingleGCell(const GCell* gCell,
                        gui::Painter& painter,
                        size_t nb_index = 0);
@@ -182,6 +183,8 @@ class GraphicsImpl : public gpl::AbstractGraphics,
   static gui::Chart* stepLength_chart_;
   static gui::Chart* routing_chart_;
   bool debug_on_{false};
+
+  std::unordered_map<odb::dbModule*, gui::Painter::Color> module_colors_;
 
   void initCharts();
   void initDebugHeatmap();

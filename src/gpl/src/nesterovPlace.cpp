@@ -304,7 +304,8 @@ void NesterovPlace::updateIterGraphics(
         = (iter == 0 || (iter + 1) % npVars_.debug_update_iterations == 0);
     if (update) {
       bool pause
-          = (iter == 0 || (iter + 1) % npVars_.debug_pause_iterations == 0);
+          = npVars_.debug_pause_iterations > 0
+            && (iter == 0 || (iter + 1) % npVars_.debug_pause_iterations == 0);
       graphics_->cellPlot(pause);
     }
   }
@@ -1023,6 +1024,122 @@ void NesterovPlace::reportResults(int nesterov_iter,
              placement_diff);
 }
 
+void NesterovPlace::reportModuleCenters()
+{
+  std::unordered_map<odb::dbModule*, size_t> module_gcell_count;
+  std::unordered_map<odb::dbModule*, std::pair<int64_t, int64_t>>
+      module_centers;
+
+  // Helper function
+  auto handleGCell = [&](auto& gcell) {
+    if (!gcell->isInstance()) {
+      return;
+    }
+    for (auto& inst : gcell->insts()) {
+      auto db_inst = inst->dbInst();
+      if (!db_inst) {
+        continue;
+      }
+      auto db_mod = db_inst->getModule();
+      if (!db_mod) {
+        continue;
+      }
+      module_gcell_count[db_mod]++;
+      module_centers[db_mod].first += gcell->dCx();
+      module_centers[db_mod].second += gcell->dCy();
+    }
+  };
+
+  // Collect all GCells
+  for (auto& gcell : nbc_->getGCells()) {
+    handleGCell(gcell);
+  }
+  for (auto& nb : nbVec_) {
+    for (auto& gcell : nb->getGCells()) {
+      handleGCell(gcell);
+    }
+  }
+
+  // Average the centers
+  for (auto& [mod, count] : module_gcell_count) {
+    if (count > 0) {
+      module_centers[mod].first /= count;
+      module_centers[mod].second /= count;
+    }
+  }
+
+  // Print the module centers for debugging
+  log_->info(GPL, 1020, "Module centers after Nesterov placement:");
+
+  double total_delta_x = 0;
+  double total_delta_y = 0;
+
+  odb::dbBlock* block = pbc_->db()->getChip()->getBlock();
+
+  for (auto& [mod, center] : module_centers) {
+    if (module_centers_history_.empty()) {
+      log_->info(GPL,
+                 1021,
+                 "Module {}: Center at ({}, {})",
+                 mod->getName(),
+                 center.first,
+                 center.second);
+      continue;
+    }
+
+    const double center_x = block->dbuToMicrons(center.first);
+    const double center_y = block->dbuToMicrons(center.second);
+
+    // Compare with previous centers
+    auto prev_center_it = module_centers_history_.back().find(mod);
+    if (prev_center_it != module_centers_history_.back().end()) {
+      auto& prev_center = prev_center_it->second;
+
+      const double delta_x
+          = block->dbuToMicrons(center.first - prev_center.first);
+      const double delta_y
+          = block->dbuToMicrons(center.second - prev_center.second);
+
+      total_delta_x += delta_x;
+      total_delta_y += delta_y;
+
+      log_->info(
+          GPL,
+          1022,
+          "Module {}: Center at ({}, {}), Delta from previous center: ({}, {})",
+          mod->getName(),
+          center_x,
+          center_y,
+          delta_x,
+          delta_y);
+    } else {
+      log_->info(GPL,
+                 1023,
+                 "Module {}: Center at ({}, {}), No previous center recorded",
+                 mod->getName(),
+                 center_x,
+                 center_y);
+    }
+  }
+
+  // Total delta for all modules
+  // if (!module_gcell_count.empty()) {
+  //   total_delta_x /= module_gcell_count.size();
+  //   total_delta_y /= module_gcell_count.size();
+  // }
+  double total
+      = sqrt(total_delta_x * total_delta_x + total_delta_y * total_delta_y);
+  log_->info(GPL,
+             1024,
+             "Total delta for all modules: ({}, {}) -> {}",
+             total_delta_x,
+             total_delta_y,
+             total);
+
+  // Add to the history
+  module_centers_history_.push_back(module_centers);
+}
+
 int NesterovPlace::doNesterovPlace(int start_iter)
 {
   // if replace diverged in init() function, Nesterov must be skipped.
@@ -1054,7 +1171,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
   if (graphics_ && graphics_->enabled() && npVars_.debug
       && npVars_.debug_start_iter == start_iter) {
-    graphics_->cellPlot(true);
+    graphics_->cellPlot(npVars_.debug_pause_iterations > 0);
   }
 
   for (auto& nb : nbVec_) {
@@ -1092,10 +1209,16 @@ int NesterovPlace::doNesterovPlace(int start_iter)
   // Core Nesterov Loop
   int nesterov_iter = start_iter;
   const bool pulsed_placement_enabled = nbc_->getNbVars().pulsedPlacement;
-  const float pulsed_placement_overflow = nbc_->getNbVars().pulsedPlacementOverflow;
-  const float pulsed_placement_weight_increase = nbc_->getNbVars().pulsedPlacementIterations > 1 ? 
-    (nbc_->getNbVars().pulsedPlacementEndWeightFactor - nbc_->getNbVars().pulsedPlacementWeightFactor) / (nbc_->getNbVars().pulsedPlacementIterations - 1) : nbc_->getNbVars().pulsedPlacementEndWeightFactor;
-  float pulsed_placement_weight_factor = nbc_->getNbVars().pulsedPlacementWeightFactor;
+  const float pulsed_placement_overflow
+      = nbc_->getNbVars().pulsedPlacementOverflow;
+  const float pulsed_placement_weight_increase
+      = nbc_->getNbVars().pulsedPlacementIterations > 1
+            ? (nbc_->getNbVars().pulsedPlacementEndWeightFactor
+               - nbc_->getNbVars().pulsedPlacementWeightFactor)
+                  / (nbc_->getNbVars().pulsedPlacementIterations - 1)
+            : nbc_->getNbVars().pulsedPlacementEndWeightFactor;
+  float pulsed_placement_weight_factor
+      = nbc_->getNbVars().pulsedPlacementWeightFactor;
   int pulsed_iter = nbc_->getNbVars().pulsedPlacementIterations;
   int pulsed_test_iter = 0;
   for (; nesterov_iter < npVars_.maxNesterovIter; nesterov_iter++) {
@@ -1137,16 +1260,30 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     }
 
     pulsed_test_iter++;
-    if (pulsed_placement_enabled &&
-        average_overflow_unscaled_ < pulsed_placement_overflow &&
-        pulsed_iter > 0 && pulsed_test_iter > 50) {
-      log_->info(GPL, 1000, "Pulsed iteration: {}, overflow: {} < {}, weight_factor: {}", nesterov_iter, average_overflow_unscaled_, pulsed_placement_overflow, pulsed_placement_weight_factor);
-      for (auto& gNet : nbc_->getGNets()) {
-        gNet->setCustomWeight(gNet->getCustomWeight() * pulsed_placement_weight_factor);
+    if (pulsed_placement_enabled
+        && average_overflow_unscaled_ < pulsed_placement_overflow
+        && pulsed_iter > 0 && pulsed_test_iter > 50) {
+      log_->info(GPL,
+                 1000,
+                 "Pulsed iteration: {} at {}, overflow: {} < {}, "
+                 "weight_factor: {}, hpwl: {}",
+                 pulsed_iter,
+                 nesterov_iter,
+                 average_overflow_unscaled_,
+                 pulsed_placement_overflow,
+                 pulsed_placement_weight_factor,
+                 nbc_->getHpwl());
+      for (auto& nb : nbVec_) {
+        float density_penalty = nb->getDensityPenalty();
+        float new_density_penalty
+            = density_penalty / pulsed_placement_weight_factor;
+        nb->setDensityPenalty(new_density_penalty);
       }
       pulsed_placement_weight_factor += pulsed_placement_weight_increase;
       pulsed_iter--;
       pulsed_test_iter = 0;
+
+      reportModuleCenters();
     }
 
     runTimingDriven(nesterov_iter,
@@ -1198,6 +1335,7 @@ int NesterovPlace::doNesterovPlace(int start_iter)
   // boxes. No-op on the CPU backend.
   nbc_->mirrorNetBoxesToHost();
 
+  reportModuleCenters();
   reportResults(nesterov_iter, original_area, td_accumulated_delta_area);
 
   // In all case, including divergence, the db should be updated.

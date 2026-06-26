@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -290,6 +291,53 @@ void GraphicsImpl::drawCells(const std::vector<GCell*>& cells,
   }
 }
 
+gui::Painter::Color GraphicsImpl::getInstanceColor(const GCell* gCell,
+                                                   size_t nb_index)
+{
+  gui::Painter::Color color
+      = instances_colors_[nb_index % instances_colors_.size()];
+  if (gCell->isLocked()) {
+    return gui::Painter::kTurquoise;
+  } else if (gCell->insts().size() != 1) {
+    // Use a default color for multiple instances
+    return color;
+  }
+
+  // Single instance
+  auto dbInst = gCell->insts()[0]->dbInst();
+  if (dbInst == nullptr) {
+    return color;
+  }
+
+  // Get the module of the instance
+  auto mod = dbInst->getModule();
+  if (mod == nullptr) {
+    return color;
+  }
+
+  if (module_colors_.find(mod) == module_colors_.end()) {
+    // Generate a new color for this module
+    gui::Painter::Color colors[]
+        = {gui::Painter::kWhite,       gui::Painter::kDarkGray,
+           gui::Painter::kGray,        gui::Painter::kLightGray,
+           gui::Painter::kRed,         gui::Painter::kGreen,
+           gui::Painter::kBlue,        gui::Painter::kCyan,
+           gui::Painter::kMagenta,     gui::Painter::kYellow,
+           gui::Painter::kDarkRed,     gui::Painter::kDarkGreen,
+           gui::Painter::kDarkBlue,    gui::Painter::kDarkCyan,
+           gui::Painter::kDarkMagenta, gui::Painter::kDarkYellow,
+           gui::Painter::kOrange,      gui::Painter::kPurple,
+           gui::Painter::kLime,        gui::Painter::kTeal,
+           gui::Painter::kPink,        gui::Painter::kBrown,
+           gui::Painter::kIndigo,      gui::Painter::kTurquoise};
+
+    module_colors_[mod]
+        = colors[module_colors_.size() % (sizeof(colors) / sizeof(colors[0]))];
+  }
+
+  return module_colors_[mod];
+}
+
 void GraphicsImpl::drawSingleGCell(const GCell* gCell,
                                    gui::Painter& painter,
                                    size_t nb_index)
@@ -323,9 +371,7 @@ void GraphicsImpl::drawSingleGCell(const GCell* gCell,
       break;
     default:
       if (gCell->isInstance()) {
-        color = gCell->isLocked()
-                    ? gui::Painter::kTurquoise
-                    : instances_colors_[nb_index % instances_colors_.size()];
+        color = getInstanceColor(gCell, nb_index);
       } else if (gCell->isFiller()) {
         // Use different colors for each NesterovBase
         color = region_colors_[nb_index % region_colors_.size()];
@@ -413,6 +459,53 @@ void GraphicsImpl::drawNesterov(gui::Painter& painter)
   if (checkDisplayControl(kDrawTimingNets)) {
     drawTimingNets(painter);
   }
+
+  std::unordered_map<odb::dbModule*, size_t> module_instance_count;
+  std::unordered_map<odb::dbModule*, std::pair<int64_t, int64_t>>
+      module_mass_center;
+  for (auto& cell : nbc_->getGCells()) {
+    if (cell->isInstance()) {
+      auto dbInst = cell->insts()[0]->dbInst();
+      if (dbInst) {
+        auto mod = dbInst->getModule();
+        if (mod) {
+          module_instance_count[mod]++;
+          module_mass_center[mod].first += cell->dCx();
+          module_mass_center[mod].second += cell->dCy();
+        }
+      }
+    }
+  }
+  for (size_t nb_idx = 0; nb_idx < nbVec_.size(); ++nb_idx) {
+    const auto& nb = nbVec_[nb_idx];
+    for (auto& cell : nb->getGCells()) {
+      if (cell->isInstance()) {
+        auto dbInst = cell->insts()[0]->dbInst();
+        if (dbInst) {
+          auto mod = dbInst->getModule();
+          if (mod) {
+            module_instance_count[mod]++;
+            module_mass_center[mod].first += cell->dCx();
+            module_mass_center[mod].second += cell->dCy();
+          }
+        }
+      }
+    }
+  }
+
+  for (auto& [mod, center] : module_mass_center) {
+    center.first /= module_instance_count[mod];
+    center.second /= module_instance_count[mod];
+
+    gui::Painter::Color color = gui::Painter::kTransparent;
+    if (module_colors_.find(mod) != module_colors_.end()) {
+      color = module_colors_[mod];
+    }
+    painter.setPen(color, /*cosmetic=*/true, /*width=*/10);
+    painter.drawX(center.first, center.second, 1000);
+  }
+
+  painter.setPen(gui::Painter::kWhite);
 
   // Create lighter versions of the region_colors_ with alpha 50
   std::vector<gui::Painter::Color> light_colors;
@@ -645,9 +738,9 @@ void GraphicsImpl::addIter(const int iter, const double overflow)
       values.push_back(
           block->dbuAreaToMicrons(nbVec_[0]->getNesterovInstsArea()));
       const double total_tiles = static_cast<double>(rb_->getTotalTilesCount());
-      values.push_back(total_tiles > 0.0 ? (static_cast<double>(
-                                                rb_->getOverflowedTilesCount())
-                                            / total_tiles * 100.0)
+      values.push_back(total_tiles > 0.0 ? (
+                           static_cast<double>(rb_->getOverflowedTilesCount())
+                           / total_tiles * 100.0)
                                          : 0.0);
       values.push_back((rb_->getTotalRudyOverflow()));
     } else {

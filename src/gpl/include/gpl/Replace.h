@@ -77,7 +77,7 @@ struct PlaceOptions
   float timingNetWeightMax = 5;
   float timingDrivenNetsPercentage = 10;
   float overflow = 0.1;
-  int nesterovPlaceMaxIter = 5000;
+  int nesterovPlaceMaxIter = 1000000;
   // timing driven check overflow to keep resizer changes (non-virtual resizer)
   float keepResizeBelowOverflow = 1.0;
   bool routabilityUseRudy = true;

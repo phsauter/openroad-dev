@@ -436,7 +436,7 @@ BrowserWidget::ModuleStats BrowserWidget::populateModule(odb::dbModule* module,
 {
   ModuleStats stats;
   for (auto* child : module->getChildren()) {
-    stats += addModuleItem(child->getMaster(), parent, false);
+    stats += addModuleItem(child->getMaster(), parent, true);
   }
   stats.resetMacros();
   stats.resetInstances();
@@ -590,7 +590,14 @@ BrowserWidget::ModuleStats BrowserWidget::addModuleItem(odb::dbModule* module,
   stats.incrementModules();
 
   if (expand) {
+    // Expand this module
     view_->expand(item->index());
+
+    // Also expand all children
+    for (auto* child : getChildren(module)) {
+      auto* child_item = modulesmap_[child];
+      view_->expand(child_item->index());
+    }
   }
 
   return stats;

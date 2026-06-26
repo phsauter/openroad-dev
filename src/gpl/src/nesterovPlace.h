@@ -124,6 +124,8 @@ class NesterovPlace
                      int64_t original_area,
                      int64_t td_accumulated_delta_area);
 
+  void reportModuleCenters();
+
   std::shared_ptr<PlacerBaseCommon> pbc_;
   std::shared_ptr<NesterovBaseCommon> nbc_;
   std::vector<std::shared_ptr<PlacerBase>> pbVec_;
@@ -179,6 +181,8 @@ class NesterovPlace
   void reset();
 
   std::unique_ptr<nesterovDbCbk> db_cbk_;
+
+  std::vector<std::unordered_map<odb::dbModule*, std::pair<int64_t, int64_t>>> module_centers_history_;
 };
 
 class nesterovDbCbk : public odb::dbBlockCallBackObj
