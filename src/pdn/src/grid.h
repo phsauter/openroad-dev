@@ -87,11 +87,13 @@ class Grid
   void makeShapes(const Shape::ShapeTreeMap& global_shapes,
                   const Shape::ObstructionTreeMap& obstructions);
   virtual Shape::ShapeTreeMap getShapes() const;
+  void getSwitchedPowerShapes(Shape::ShapeTreeMap& shapes) const;
 
   // make the vias for the this grid
-  void makeVias(const Shape::ShapeTreeMap& global_shapes,
+  bool makeVias(const Shape::ShapeTreeMap& global_shapes,
                 const Shape::ObstructionTreeMap& obstructions,
-                Shape::ObstructionTreeMap& local_obstructions);
+                Shape::ObstructionTreeMap& local_obstructions,
+                const std::vector<Connect*>& extra_connects = {});
   void makeVias(const Shape::ShapeTreeMap& global_shapes,
                 const Shape::ObstructionTreeMap& obstructions);
   void getVias(std::vector<ViaPtr>& vias) const;
@@ -198,7 +200,8 @@ class Grid
   std::vector<GridComponent*> getGridComponents() const;
   void removeGridComponent(GridComponent* component);
   bool repairVias(const Shape::ShapeTreeMap& global_shapes,
-                  Shape::ObstructionTreeMap& obstructions);
+                  Shape::ObstructionTreeMap& obstructions,
+                  const std::vector<Connect*>& extra_connects = {});
 };
 
 class CoreGrid : public Grid
