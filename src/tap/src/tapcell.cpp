@@ -408,6 +408,11 @@ vector<odb::dbBox*> Tapcell::findBlockages()
       blockages.push_back(inst->getBBox());
     }
   }
+  for (auto* blockage : db_->getChip()->getBlock()->getBlockages()) {
+    if (!blockage->isSoft()) {
+      blockages.push_back(blockage->getBBox());
+    }
+  }
 
   return blockages;
 }

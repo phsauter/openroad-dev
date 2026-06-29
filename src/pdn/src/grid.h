@@ -232,7 +232,7 @@ class InstanceGrid : public Grid
   InstanceGrid(VoltageDomain* domain,
                const std::string& name,
                bool start_with_power,
-               odb::dbInst* inst,
+               const std::vector<odb::dbInst*>& insts,
                const std::vector<odb::dbTechLayer*>& generate_obstructions);
 
   std::string getLongName() const override;
@@ -240,8 +240,8 @@ class InstanceGrid : public Grid
   void report() const override;
   Type type() const override { return Grid::kInstance; }
 
-  odb::dbInst* getInstance() const { return inst_; }
-  odb::PtrSet<odb::dbInst> getInstances() const override { return {inst_}; }
+  odb::dbInst* getInstance() const { return insts_.front(); }
+  odb::PtrSet<odb::dbInst> getInstances() const override;
 
   std::vector<odb::dbNet*> getNets(bool starts_with_power) const override;
 
@@ -274,7 +274,7 @@ class InstanceGrid : public Grid
                         const Shape::ShapeTreeMap& shapes) const override;
 
  private:
-  odb::dbInst* inst_;
+  std::vector<odb::dbInst*> insts_;
   Halo halos_ = {0, 0, 0, 0};
   bool grid_to_boundary_ = false;
 
