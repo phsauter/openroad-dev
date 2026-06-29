@@ -93,6 +93,7 @@ or_integration_tests(
     macros_cells_via_failure
     macros_connect_to_grid
     macros_different_nets
+    macros_group
     macros_grid_check
     macros_grid_not_used
     macros_grid_through
