@@ -160,6 +160,7 @@ sta::define_cmd_args "define_pdn_grid" {[-name <name>] \
                                         [-instances <list_of_instances>] \
                                         [-cells <list_of_cell_names> ] \
                                         [-default] \
+                                        [-group] \
                                         [-halo <list_of_halo_values>] \
                                         [-pins <list_of_pin_layers>] \
                                         [-starts_with (POWER|GROUND)] \
@@ -978,7 +979,7 @@ proc define_pdn_grid_macro { args } {
   sta::parse_key_args "define_pdn_grid" args \
     keys {-name -voltage_domains -orient -instances -cells -halo -pin_direction -starts_with \
       -obstructions} \
-    flags {-macro -grid_over_pg_pins -grid_over_boundary -default -bump} ;# checker off
+    flags {-macro -grid_over_pg_pins -grid_over_boundary -default -group -bump} ;# checker off
 
   sta::check_argc_eq0 "define_pdn_grid" $args
   pdn::check_design_state "define_pdn_grid"
@@ -1058,6 +1059,9 @@ proc define_pdn_grid_macro { args } {
   }
 
   set is_bump [info exists flags(-bump)]
+  set group [info exists flags(-group)]
+  set grid_insts {}
+  set created false
 
   set insts {}
   if { [info exists keys(-instances)] } {
@@ -1101,29 +1105,53 @@ proc define_pdn_grid_macro { args } {
       foreach inst [[ord::get_db_block] getInsts] {
         # inst must match cells
         if { [$inst getMaster] == $cell } {
+          if { $group && ![$inst isFixed] } {
+            utl::warn PDN 1050 \
+              "Ignoring non-fixed instance for grid (${keys(-name)}): [$inst getName]"
+            continue
+          }
           lappend insts $inst
         }
       }
     }
   }
 
-  set created false
+  set insts [lsort -unique -command name_cmp $insts]
   foreach inst $insts {
     # must match orientation, if provided
     if { [match_orientation $orients [$inst getOrient]] != 0 } {
-      foreach domain $domains {
-        pdn::make_instance_grid \
-          $domain \
-          $keys(-name) \
-          $start_with_power \
-          $inst \
-          {*}$halo \
-          $pg_pins_to_boundary \
-          $default_grid \
-          $obstructions \
-          $is_bump
-        set created true
+      if { $group } {
+        lappend grid_insts $inst
+      } else {
+        foreach domain $domains {
+          pdn::make_instance_grid \
+            $domain \
+            $keys(-name) \
+            $start_with_power \
+            $inst \
+            {*}$halo \
+            $pg_pins_to_boundary \
+            $default_grid \
+            $obstructions \
+            $is_bump
+          set created true
+        }
       }
+    }
+  }
+
+  if { $group && [llength $grid_insts] > 0 } {
+    set grid_insts [lsort -unique -command name_cmp $grid_insts]
+    foreach domain $domains {
+      pdn::make_instance_group_grid \
+        $domain $keys(-name) \
+        $start_with_power \
+        $grid_insts \
+        {*}$halo \
+        $pg_pins_to_boundary \
+        $default_grid \
+        $obstructions
+      set created true
     }
   }
 

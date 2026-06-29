@@ -106,6 +106,17 @@ class PdnGen
       bool is_bump);
   void makeDummyInstanceGrid(VoltageDomain* domain, const std::string& name);
   void removeDummyInstanceGrid(const std::string& name);
+  void makeInstanceGrid(
+      VoltageDomain* domain,
+      const std::string& name,
+      StartsWith starts_with,
+      const std::vector<odb::dbInst*>& insts,
+      const std::array<int, 4>& halo,
+      bool pg_pins_to_boundary,
+      bool default_grid,
+      const std::vector<odb::dbTechLayer*>& generate_obstructions,
+      bool is_bump,
+      bool add_blockage);
   void makeExistingGrid(
       const std::string& name,
       const std::vector<odb::dbTechLayer*>& generate_obstructions);
