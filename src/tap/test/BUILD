@@ -17,6 +17,7 @@ COMPULSORY_TESTS = [
     "boundary_macros_separate2",
     "boundary_macros_tapcell",
     "cut_rows",
+    "cut_rows_blockage",
     "cut_rows_halo",
     "cut_rows_min_step_bottom_left",
     "cut_rows_min_step_bottom_right",
