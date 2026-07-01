@@ -32,6 +32,40 @@
 
 namespace pdn {
 
+odb::dbTechLayer* selectPadRouteLayer(
+    odb::dbTechLayer* source_layer,
+    odb::dbTechLayerDir route_dir,
+    const odb::PtrSet<odb::dbTechLayer>& connectable_layers)
+{
+  odb::dbTechLayer* route_layer = nullptr;
+  const int source_level = source_layer->getRoutingLevel();
+  for (auto* candidate_layer : connectable_layers) {
+    if (candidate_layer->getDirection() != route_dir) {
+      continue;
+    }
+    if (route_layer == nullptr) {
+      route_layer = candidate_layer;
+      continue;
+    }
+    const bool candidate_below
+        = candidate_layer->getRoutingLevel() < source_level;
+    const bool route_below = route_layer->getRoutingLevel() < source_level;
+    if (candidate_below != route_below) {
+      if (candidate_below) {
+        route_layer = candidate_layer;
+      }
+      continue;
+    }
+    if (candidate_below ? candidate_layer->getRoutingLevel()
+                              > route_layer->getRoutingLevel()
+                        : candidate_layer->getRoutingLevel()
+                              < route_layer->getRoutingLevel()) {
+      route_layer = candidate_layer;
+    }
+  }
+  return route_layer;
+}
+
 Straps::Straps(Grid* grid,
                odb::dbTechLayer* layer,
                int width,
@@ -1079,80 +1113,153 @@ void PadDirectConnectionStraps::makeShapesFacingCore(
   const odb::dbTransform transform = inst->getTransform();
 
   const bool is_horizontal_strap = isConnectHorizontal();
+  const auto route_dir = is_horizontal_strap ? odb::dbTechLayerDir::HORIZONTAL
+                                             : odb::dbTechLayerDir::VERTICAL;
 
   auto* net = iterm_->getNet();
+  const odb::Rect inst_rect = inst->getBBox()->getBox();
+  auto limit_width
+      = [is_horizontal_strap](odb::Rect& rect, odb::dbTechLayer* layer) {
+          if (!layer->hasMaxWidth()) {
+            return;
+          }
+          const int max_width = layer->getMaxWidth();
+          if (is_horizontal_strap) {
+            rect.set_yhi(std::min(rect.yMax(), rect.yMin() + max_width));
+          } else {
+            rect.set_xhi(std::min(rect.xMax(), rect.xMin() + max_width));
+          }
+        };
+  auto add_strap = [&](odb::dbTechLayer* layer,
+                       const odb::Rect& pin_rect,
+                       const ShapePtr& closest_shape,
+                       bool connect_iterm) {
+    odb::Rect shape_rect;
+    if (!snapRectToClosestShape(closest_shape, pin_rect, shape_rect)) {
+      return ShapePtr(nullptr);
+    }
+    limit_width(shape_rect, layer);
+    auto shape = std::make_unique<Shape>(
+        layer, net, shape_rect, odb::dbWireShapeType::STRIPE);
+    if (connect_iterm) {
+      shape->addITermConnection(pin_rect.intersect(shape_rect));
+    }
+    const auto added = addShape(std::move(shape));
+    if (added != nullptr) {
+      target_shapes_[added.get()] = closest_shape.get();
+    }
+    return added;
+  };
   for (auto* pin : pins_) {
     odb::Rect pin_rect = pin->getBox();
     transform.apply(pin_rect);
 
     auto* layer = pin->getTechLayer();
-    if (pin_layers.find(layer) == pin_layers.end()) {
-      // layer is not connectable to a target
+    const bool is_preferred_direction = layer->getDirection() == route_dir;
+    odb::dbTechLayer* route_layer = selectPadRouteLayer(
+        layer, route_dir, getGrid()->connectableLayers(layer));
+
+    // find nearest target
+    bool connected = false;
+    if ((is_preferred_direction || route_layer == nullptr)
+        && pin_layers.find(layer) != pin_layers.end()) {
+      const auto& connect_layers = connectable_layers[layer];
+      for (const auto& [search_layer, search_shape_tree] : other_shapes) {
+        if (layer == search_layer) {
+          continue;
+        }
+        if (connect_layers.find(search_layer) == connect_layers.end()) {
+          // cannot connect to this layer
+          continue;
+        }
+
+        ShapePtr closest_shape
+            = getClosestShape(search_shape_tree, pin_rect, net);
+        if (closest_shape == nullptr) {
+          continue;
+        }
+
+        debugPrint(getLogger(),
+                   utl::PDN,
+                   "Pad",
+                   2,
+                   "Connect iterm {} ({}/{}) -> {}",
+                   iterm_->getName(),
+                   layer->getName(),
+                   pin->getName(),
+                   closest_shape->getReportText());
+
+        connected |= add_strap(layer, pin_rect, closest_shape, true) != nullptr;
+      }
+    }
+    if (connected) {
+      continue;
+    }
+    if (route_layer == nullptr) {
+      continue;
+    }
+    auto get_target_shape = [&](odb::dbTechLayer* target_layer) {
+      const auto layer_shapes = other_shapes.find(target_layer);
+      if (layer_shapes == other_shapes.end()) {
+        return ShapePtr(nullptr);
+      }
+      Shape::ShapeTree target_shapes;
+      for (const auto& shape : layer_shapes->second) {
+        if (shape->getGridComponent() != nullptr
+            && !inst_rect.intersects(shape->getRect())) {
+          target_shapes.insert(shape);
+        }
+      }
+      if (target_shapes.empty()) {
+        return ShapePtr(nullptr);
+      }
+      return getClosestShape(target_shapes, pin_rect, net);
+    };
+    ShapePtr target_shape = get_target_shape(layer);
+    if (target_shape == nullptr) {
+      target_shape = get_target_shape(route_layer);
+    }
+    if (target_shape == nullptr) {
+      for (auto* target_layer : connectable_layers[route_layer]) {
+        if (target_layer == layer || target_layer == route_layer) {
+          continue;
+        }
+        target_shape = get_target_shape(target_layer);
+        if (target_shape != nullptr) {
+          break;
+        }
+      }
+    }
+    if (target_shape == nullptr) {
       continue;
     }
 
-    const auto& connect_layers = connectable_layers[layer];
+    odb::Rect route_pin = pin_rect;
+    limit_width(route_pin, layer);
+    limit_width(route_pin, route_layer);
+    const int width = route_layer->getMinWidth();
+    if (is_horizontal_strap) {
+      const int x = pad_edge_ == odb::dbDirection::WEST ? inst_rect.xMax()
+                                                        : inst_rect.xMin();
+      route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? x : x - width);
+      route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? x + width : x);
+    } else {
+      const int y = pad_edge_ == odb::dbDirection::SOUTH ? inst_rect.yMax()
+                                                         : inst_rect.yMin();
+      route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? y : y - width);
+      route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? y + width : y);
+    }
 
-    // find nearest target
-    for (const auto& [search_layer, search_shape_tree] : other_shapes) {
-      if (layer == search_layer) {
-        continue;
-      }
-      if (connect_layers.find(search_layer) == connect_layers.end()) {
-        // cannot connect to this layer
-        continue;
-      }
-
-      ShapePtr closest_shape
-          = getClosestShape(search_shape_tree, pin_rect, net);
-      if (closest_shape == nullptr) {
-        continue;
-      }
-
-      debugPrint(getLogger(),
-                 utl::PDN,
-                 "Pad",
-                 2,
-                 "Connect iterm {} ({}/{}) -> {}",
-                 iterm_->getName(),
-                 layer->getName(),
-                 pin->getName(),
-                 closest_shape->getReportText());
-
-      odb::Rect shape_rect;
-      if (!snapRectToClosestShape(closest_shape, pin_rect, shape_rect)) {
-        continue;
-      }
-
-      if (layer->hasMaxWidth()) {
-        const int max_width = layer->getMaxWidth();
-        // check max width and adjust if needed
-        if (is_horizontal_strap) {
-          // shape will be horizontal
-          if (shape_rect.dy() > max_width) {
-            // fix width to max
-            shape_rect.set_yhi(shape_rect.yMin() + max_width);
-          }
-        } else {
-          // shape will be vertical
-          if (shape_rect.dx() > max_width) {
-            // fix width to max
-            shape_rect.set_xhi(shape_rect.xMin() + max_width);
-          }
-        }
-      }
-
-      auto shape = std::make_unique<Shape>(
-          layer, net, shape_rect, odb::dbWireShapeType::STRIPE);
-      // use intersection of pin_rect to ensure max width limitation is
-      // preserved
-      shape->addITermConnection(pin_rect.intersect(shape_rect));
-      const auto added = addShape(std::move(shape));
-      if (added == nullptr) {
-        continue;
-      }
-
-      target_shapes_[added.get()] = closest_shape.get();
+    odb::Rect escape_rect = pin_rect;
+    escape_rect.merge(route_pin);
+    auto shape = std::make_unique<Shape>(
+        layer, net, escape_rect, odb::dbWireShapeType::STRIPE);
+    shape->setAllowsNonPreferredDirectionChange();
+    shape->addITermConnection(pin_rect.intersect(escape_rect));
+    const auto escape = addShape(std::move(shape));
+    if (escape != nullptr
+        && add_strap(route_layer, route_pin, target_shape, false) == nullptr) {
+      removeShape(escape.get());
     }
   }
 }
@@ -1280,6 +1387,54 @@ void PadDirectConnectionStraps::makeShapesOverPads(
   odb::Rect shape_rect;
   if (!snapRectToClosestShape(closest_shape, pin_shape, shape_rect)) {
     return;
+  }
+
+  if (getDirection() != getLayer()->getDirection()) {
+    odb::dbTechLayer* route_layer = selectPadRouteLayer(
+        getLayer(), getDirection(), getGrid()->connectableLayers(getLayer()));
+
+    if (route_layer != nullptr) {
+      odb::Rect route_pin = pin_shape;
+      const int width = route_layer->getMinWidth();
+      if (is_horizontal) {
+        const int x = pad_edge_ == odb::dbDirection::WEST ? inst_rect.xMax()
+                                                          : inst_rect.xMin();
+        route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? x : x - width);
+        route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? x + width : x);
+      } else {
+        const int y = pad_edge_ == odb::dbDirection::SOUTH ? inst_rect.yMax()
+                                                           : inst_rect.yMin();
+        route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? y : y - width);
+        route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? y + width : y);
+      }
+
+      odb::Rect escape_rect = pin_shape;
+      escape_rect.merge(route_pin);
+      auto escape_shape = std::make_unique<Shape>(getLayer(),
+                                                  iterm_->getNet(),
+                                                  escape_rect,
+                                                  odb::dbWireShapeType::STRIPE);
+      escape_shape->setAllowsNonPreferredDirectionChange();
+      const auto escape = addShape(std::move(escape_shape));
+      if (escape != nullptr) {
+        escape->addITermConnection(org_pin_shape.intersect(escape->getRect()));
+        odb::Rect route_rect;
+        if (snapRectToClosestShape(closest_shape, route_pin, route_rect)) {
+          auto route_shape
+              = std::make_unique<Shape>(route_layer,
+                                        iterm_->getNet(),
+                                        route_rect,
+                                        odb::dbWireShapeType::STRIPE);
+          const auto route = addShape(std::move(route_shape));
+          if (route != nullptr) {
+            target_shapes_[route.get()] = closest_shape.get();
+            target_pin_shape_[route.get()] = org_pin_shape;
+            return;
+          }
+        }
+        removeShape(escape.get());
+      }
+    }
   }
 
   auto shape = std::make_unique<Shape>(
