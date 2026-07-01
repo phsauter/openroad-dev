@@ -495,20 +495,23 @@ bool Grid::repairVias(const Shape::ShapeTreeMap& global_shapes,
       return;
     }
 
-    auto target_obs_filter
-        = [&obs_filter, target, target_grid](const ShapePtr& other) {
-            if (other == target) {
-              return false;
-            }
-            if (!obs_filter(other)) {
-              return false;
-            }
-            if (other->shapeType() != Shape::kGridObs) {
-              return true;
-            }
-            const GridObsShape* shape = static_cast<GridObsShape*>(other.get());
-            return !shape->belongsTo(target_grid);
-          };
+    auto target_obs_filter =
+        [&obs_filter, target, target_grid, extend_test](const ShapePtr& other) {
+          if (other == target) {
+            return false;
+          }
+          if (other->getObstruction().intersects(extend_test->getRect())) {
+            return false;
+          }
+          if (!obs_filter(other)) {
+            return false;
+          }
+          if (other->shapeType() != Shape::kGridObs) {
+            return true;
+          }
+          const GridObsShape* shape = static_cast<GridObsShape*>(other.get());
+          return !shape->belongsTo(target_grid);
+        };
 
     const Shape::ShapeTree* extension_shapes
         = &search_shapes[extend_test->getLayer()];
@@ -772,7 +775,8 @@ void Grid::report() const
 }
 
 void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
-                            const Shape::ShapeTreeMap& search_shapes) const
+                            const Shape::ShapeTreeMap& search_shapes,
+                            const std::vector<Connect*>& extra_connects) const
 {
   debugPrint(getLogger(),
              utl::PDN,
@@ -787,8 +791,15 @@ void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
     comp->getConnectableShapes(shapes);
   }
 
-  // loop over connect statements
+  std::vector<Connect*> connects;
+  connects.reserve(connect_.size() + extra_connects.size());
   for (const auto& connect : connect_) {
+    connects.push_back(connect.get());
+  }
+  connects.insert(connects.end(), extra_connects.begin(), extra_connects.end());
+
+  // loop over connect statements
+  for (Connect* connect : connects) {
     odb::dbTechLayer* lower_layer = connect->getLowerLayer();
     odb::dbTechLayer* upper_layer = connect->getUpperLayer();
 
@@ -860,11 +871,8 @@ void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
 
         const odb::Rect via_rect
             = lower_shape->getRect().intersect(upper_shape->getRect());
-        auto* via = new Via(connect.get(),
-                            lower_shape->getNet(),
-                            via_rect,
-                            lower_shape,
-                            upper_shape);
+        auto* via = new Via(
+            connect, lower_shape->getNet(), via_rect, lower_shape, upper_shape);
         shape_intersections.push_back(ViaPtr(via));
       }
     }
@@ -1087,21 +1095,22 @@ bool Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
                     Shape::ObstructionTreeMap& local_obstructions,
                     const std::vector<Connect*>& extra_connects)
 {
-  makeVias(global_shapes, obstructions);
+  makeVias(global_shapes, obstructions, extra_connects);
 
   // repair vias that are only partially overlapping straps
   const bool repaired
       = repairVias(global_shapes, local_obstructions, extra_connects);
   if (repaired) {
     // rebuild vias since shapes changed
-    makeVias(global_shapes, obstructions);
+    makeVias(global_shapes, obstructions, extra_connects);
   }
 
   return repaired;
 }
 
 void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
-                    const Shape::ObstructionTreeMap& obstructions)
+                    const Shape::ObstructionTreeMap& obstructions,
+                    const std::vector<Connect*>& extra_connects)
 {
   debugPrint(
       getLogger(), utl::PDN, "Make", 1, "Making vias in \"{}\" - start", name_);
@@ -1134,7 +1143,7 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
 
   // get possible vias
   std::vector<ViaPtr> vias;
-  getIntersections(vias, search_shapes);
+  getIntersections(vias, search_shapes, extra_connects);
 
   auto remove_set_of_vias = [&vias](std::set<ViaPtr>& remove_vias) {
     std::erase_if(vias,
@@ -1966,8 +1975,10 @@ ShapeVectorMap InstanceGrid::getInstancePins(odb::dbInst* inst)
   return shapes;
 }
 
-void InstanceGrid::getIntersections(std::vector<ViaPtr>& vias,
-                                    const Shape::ShapeTreeMap& shapes) const
+void InstanceGrid::getIntersections(
+    std::vector<ViaPtr>& vias,
+    const Shape::ShapeTreeMap& shapes,
+    const std::vector<Connect*>& extra_connects) const
 {
   // add instance pins
   Shape::ShapeTreeMap inst_shapes = shapes;
@@ -1984,7 +1995,7 @@ void InstanceGrid::getIntersections(std::vector<ViaPtr>& vias,
     }
   }
 
-  Grid::getIntersections(vias, inst_shapes);
+  Grid::getIntersections(vias, inst_shapes, extra_connects);
 }
 
 std::vector<odb::dbNet*> InstanceGrid::getNets(bool starts_with_power) const
