@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <memory>
 #include <set>
@@ -43,6 +44,14 @@ namespace pdn {
 using utl::Logger;
 
 namespace {
+
+void removePdnMarkers(odb::dbBlock* block)
+{
+  odb::dbMarkerCategory* category = block->findMarkerCategory("PDN");
+  if (category != nullptr) {
+    odb::dbMarkerCategory::destroy(category);
+  }
+}
 
 void addGridShapes(Shape::ShapeTreeMap& shapes, Grid* grid)
 {
@@ -82,6 +91,7 @@ void PdnGen::buildGrids(bool trim)
   auto* block = db_->getChip()->getBlock();
 
   resetShapes();
+  removePdnMarkers(block);
 
   const std::vector<Grid*> grids = getGrids(true);
 
@@ -130,10 +140,17 @@ void PdnGen::buildGrids(bool trim)
   }
   all_shapes_vec.clear();
 
+  std::exception_ptr build_error;
   for (auto* grid : grids) {
     debugPrint(
         logger_, utl::PDN, "Make", 2, "Build start grid - {}", grid->getName());
-    grid->makeShapes(all_shapes, block_obs);
+    try {
+      grid->makeShapes(all_shapes, block_obs);
+    } catch (const std::runtime_error&) {
+      if (build_error == nullptr) {
+        build_error = std::current_exception();
+      }
+    }
     addGridShapes(all_shapes, grid);
     grid->getObstructions(block_obs);
     debugPrint(
@@ -293,6 +310,10 @@ void PdnGen::buildGrids(bool trim)
   }
 
   updateRenderer(false);
+
+  if (build_error != nullptr) {
+    std::rethrow_exception(build_error);
+  }
 
   if (failed) {
     logger_->error(utl::PDN, 233, "Failed to generate full power grid.");
