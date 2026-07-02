@@ -2515,6 +2515,7 @@ void RepairChannelStraps::repairGridChannels(
         if (marker == nullptr) {
           continue;
         }
+        marker->setTechLayer(channel.connect_to);
         marker->addShape(channel.area);
         for (auto* net : channel.nets) {
           marker->addSource(net);
