@@ -684,9 +684,22 @@ std::unique_ptr<Shape> Shape::extendTo(
   new_shape->getObstruction().bloat(-1, new_obs_rect);
 
   if (shapes.qbegin(bgi::intersects(new_obs_rect)
-                    && bgi::satisfies([&orig_shape](const auto& other) {
+                    && bgi::satisfies([this, &orig_shape](const auto& other) {
                          // ignore violations that results from itself
-                         return other.get() != orig_shape;
+                         if (other.get() == orig_shape) {
+                           return false;
+                         }
+                         if (other->net_ != nullptr && net_ == other->net_) {
+                           auto* this_component = getGridComponent();
+                           auto* other_component = other->getGridComponent();
+                           if (this_component == nullptr
+                               || other_component == nullptr
+                               || this_component->getDomain()
+                                      == other_component->getDomain()) {
+                             return false;
+                           }
+                         }
+                         return true;
                        }))
       != shapes.qend()) {
     // extension not possible

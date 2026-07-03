@@ -121,6 +121,7 @@ class Grid
   virtual std::vector<odb::Rect> getDomainAreaRects() const;
   // returns the largest boundary for the grid
   virtual odb::Rect getGridArea() const;
+  virtual std::vector<odb::Rect> getGridAreaRects() const;
   // returns the outline of the rings
   virtual odb::Rect getRingArea() const;
   // returns the core area to use for extending straps
@@ -256,7 +257,7 @@ class InstanceGrid : public Grid
   odb::Rect getDomainArea() const override;
   odb::Rect getGridArea() const override;
   std::vector<odb::Rect> getDomainAreaRects() const override;
-  std::vector<odb::Rect> getGridAreaRects() const;
+  std::vector<odb::Rect> getGridAreaRects() const override;
   odb::Rect getDomainBoundary() const override;
   odb::Rect getGridBoundary() const override;
 
