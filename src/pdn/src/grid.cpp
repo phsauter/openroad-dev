@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "boost/geometry/geometry.hpp"
+#include "boost/polygon/polygon.hpp"
 #include "connect.h"
 #include "domain.h"
 #include "odb/PtrSetMap.h"
@@ -34,6 +35,46 @@
 namespace pdn {
 
 namespace bgi = boost::geometry::index;
+
+namespace {
+
+std::vector<odb::Rect> getRectilinearRects(const std::vector<odb::Rect>& rects)
+{
+  using boost::polygon::operators::operator+=;
+  using Rectangle = boost::polygon::rectangle_data<int>;
+  using Polygon90 = boost::polygon::polygon_90_with_holes_data<int>;
+  using Polygon90Set = boost::polygon::polygon_90_set_data<int>;
+
+  Polygon90Set rect_set;
+  odb::Rect bbox;
+  bbox.mergeInit();
+  for (const auto& rect : rects) {
+    rect_set += Rectangle(rect.xMin(), rect.yMin(), rect.xMax(), rect.yMax());
+    bbox.merge(rect);
+  }
+
+  Polygon90Set connected_set = rect_set;
+  connected_set.bloat(1, 1, 1, 1);
+
+  std::vector<Polygon90> polygons;
+  connected_set.get_polygons(polygons);
+  if (polygons.size() != 1) {
+    return {bbox};
+  }
+
+  std::vector<Rectangle> rectangles;
+  rect_set.get_rectangles(rectangles);
+
+  std::vector<odb::Rect> rectilinear_rects;
+  rectilinear_rects.reserve(rectangles.size());
+  for (const auto& rect : rectangles) {
+    rectilinear_rects.emplace_back(xl(rect), yl(rect), xh(rect), yh(rect));
+  }
+  std::ranges::sort(rectilinear_rects);
+  return rectilinear_rects;
+}
+
+}  // namespace
 
 Grid::Grid(VoltageDomain* domain,
            const std::string& name,
@@ -655,6 +696,11 @@ void Grid::getSwitchedPowerShapes(Shape::ShapeTreeMap& shapes) const
 odb::Rect Grid::getDomainArea() const
 {
   return domain_->getDomainArea();
+}
+
+std::vector<odb::Rect> Grid::getDomainAreaRects() const
+{
+  return {getDomainArea()};
 }
 
 odb::Rect Grid::getDomainBoundary() const
@@ -1809,6 +1855,26 @@ odb::Rect InstanceGrid::getDomainBoundary() const
 odb::Rect InstanceGrid::getGridArea() const
 {
   return applyHalo(getDomainArea(), false, true, true);
+}
+
+std::vector<odb::Rect> InstanceGrid::getDomainAreaRects() const
+{
+  std::vector<odb::Rect> rects;
+  rects.reserve(insts_.size());
+  for (auto* inst : insts_) {
+    rects.push_back(inst->getBBox()->getBox());
+  }
+  return getRectilinearRects(rects);
+}
+
+std::vector<odb::Rect> InstanceGrid::getGridAreaRects() const
+{
+  std::vector<odb::Rect> rects;
+  rects.reserve(insts_.size());
+  for (auto* inst : insts_) {
+    rects.push_back(applyHalo(inst->getBBox()->getBox(), false, true, true));
+  }
+  return getRectilinearRects(rects);
 }
 
 odb::Rect InstanceGrid::applyHalo(const odb::Rect& rect,

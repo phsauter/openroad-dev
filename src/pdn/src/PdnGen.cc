@@ -827,12 +827,13 @@ void PdnGen::makeInstanceGrid(
   }
 
   if (add_blockage) {
-    const auto group_area = grid->getGridArea();
-    odb::dbBlockage::create(db_->getChip()->getBlock(),
-                            group_area.xMin(),
-                            group_area.yMin(),
-                            group_area.xMax(),
-                            group_area.yMax());
+    for (const auto& group_area : grid->getGridAreaRects()) {
+      odb::dbBlockage::create(db_->getChip()->getBlock(),
+                              group_area.xMin(),
+                              group_area.yMin(),
+                              group_area.xMax(),
+                              group_area.yMax());
+    }
   }
 
   domain->addGrid(std::move(grid));
