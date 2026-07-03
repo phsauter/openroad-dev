@@ -95,6 +95,7 @@ or_integration_tests(
     macros_different_nets
     macros_group
     macros_group_connect_to_grid
+    macros_group_rectilinear
     macros_grid_check
     macros_grid_not_used
     macros_grid_through
