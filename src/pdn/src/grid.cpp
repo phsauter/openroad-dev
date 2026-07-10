@@ -2145,9 +2145,10 @@ bool InstanceGrid::hasHalo() const
 }
 
 InstanceGrid::Halo InstanceGrid::suggestHalo(
+    odb::dbInst* inst,
     const std::vector<odb::Rect>& rows) const
 {
-  const odb::Rect inst_box = inst_->getBBox()->getBox();
+  const odb::Rect inst_box = inst->getBBox()->getBox();
   const odb::Rect inst_halo = applyHalo(inst_box, halos_, true, true, true);
 
   // Whether a row shares the instance's horizontal/vertical extent.  A row
@@ -2211,48 +2212,57 @@ InstanceGrid::Halo InstanceGrid::suggestHalo(
 
 void InstanceGrid::checkHalo() const
 {
-  if (!hasHalo() || inst_->getMaster()->isCover()) {
+  if (!hasHalo()) {
     return;
   }
 
-  const odb::Rect inst_box = inst_->getBBox()->getBox();
-  const odb::Rect halo_box = applyHalo(inst_box, true, true, true);
-
-  // Collect rows the halo intrudes into.  Rows the instance footprint itself
-  // overlaps are skipped: no halo adjustment can clear those (the instance is
-  // placed on top of them), so they are out of scope here.
-  std::vector<odb::Rect> overlapping_rows;
-  std::string first_row;
-  for (auto* row : getBlock()->getRows()) {
-    const odb::Rect row_box = row->getBBox();
-    if (!halo_box.overlaps(row_box) || inst_box.overlaps(row_box)) {
+  for (auto* inst : insts_) {
+    if (inst->getMaster()->isCover()) {
       continue;
     }
-    if (overlapping_rows.empty()) {
-      first_row = row->getName();
+
+    const odb::Rect inst_box = inst->getBBox()->getBox();
+    const odb::Rect halo_box = applyHalo(inst_box, true, true, true);
+
+    // Collect rows the halo intrudes into.  Rows the instance footprint itself
+    // overlaps are skipped: no halo adjustment can clear those (the instance is
+    // placed on top of them), so they are out of scope here.
+    std::vector<odb::Rect> overlapping_rows;
+    std::string first_row;
+    for (auto* row : getBlock()->getRows()) {
+      const odb::Rect row_box = row->getBBox();
+      if (!halo_box.overlaps(row_box) || inst_box.overlaps(row_box)) {
+        continue;
+      }
+      if (overlapping_rows.empty()) {
+        first_row = row->getName();
+      }
+      overlapping_rows.push_back(row_box);
     }
-    overlapping_rows.push_back(row_box);
+
+    if (overlapping_rows.empty()) {
+      continue;
+    }
+
+    const Halo suggested = suggestHalo(inst, overlapping_rows);
+    const std::string grid_name = insts_.size() == 1
+                                      ? getLongName()
+                                      : getLongName() + " - " + inst->getName();
+
+    const double dbus = getBlock()->getDbUnitsPerMicron();
+    getLogger()->error(
+        utl::PDN,
+        8,
+        "{} halo overlaps row {} (and {} other row(s)); reduce the halo to at "
+        "most \"{:.4f} {:.4f} {:.4f} {:.4f}\".",
+        grid_name,
+        first_row,
+        overlapping_rows.size() - 1,
+        suggested[0] / dbus,
+        suggested[1] / dbus,
+        suggested[2] / dbus,
+        suggested[3] / dbus);
   }
-
-  if (overlapping_rows.empty()) {
-    return;
-  }
-
-  const Halo suggested = suggestHalo(overlapping_rows);
-
-  const double dbus = getBlock()->getDbUnitsPerMicron();
-  getLogger()->error(
-      utl::PDN,
-      8,
-      "{} halo overlaps row {} (and {} other row(s)); reduce the halo to at "
-      "most \"{:.4f} {:.4f} {:.4f} {:.4f}\".",
-      getLongName(),
-      first_row,
-      overlapping_rows.size() - 1,
-      suggested[0] / dbus,
-      suggested[1] / dbus,
-      suggested[2] / dbus,
-      suggested[3] / dbus);
 }
 
 void InstanceGrid::checkSetup() const

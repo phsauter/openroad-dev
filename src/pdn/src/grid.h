@@ -300,7 +300,7 @@ class InstanceGrid : public Grid
                              bool apply_vertical);
   bool hasHalo() const;
   void checkHalo() const;
-  Halo suggestHalo(const std::vector<odb::Rect>& rows) const;
+  Halo suggestHalo(odb::dbInst* inst, const std::vector<odb::Rect>& rows) const;
 };
 
 class DummyInstanceGrid : public Grid
@@ -315,7 +315,7 @@ class DummyInstanceGrid : public Grid
   odb::PtrSet<odb::dbInst> getInstances() const override { return {}; }
 
   bool isReplaceable() const override { return true; }
-  void checkSetup() const override {};
+  void checkSetup() const override{};
 };
 
 class BumpGrid : public InstanceGrid
