@@ -2067,12 +2067,26 @@ void InstanceGrid::getIntersections(
 {
   // add instance pins
   Shape::ShapeTreeMap inst_shapes = shapes;
+  GridComponent* pin_owner = nullptr;
+  // Instance pins are temporary shapes, but the via ownership filter uses
+  // GridComponent back-pointers to decide which grid may connect them.
+  const Shape::ShapeTreeMap grid_shapes = getShapes();
+  for (const auto& [layer, layer_shapes] : grid_shapes) {
+    for (const auto& shape : layer_shapes) {
+      pin_owner = shape->getGridComponent();
+      break;
+    }
+    if (pin_owner != nullptr) {
+      break;
+    }
+  }
   for (auto* net : getNets(false)) {
     for (auto* inst : insts_) {
       for (const auto& [layer, shapes_on_layer] : getInstancePins(inst)) {
         auto& layer_shapes = inst_shapes[layer];
         for (const auto& shape : shapes_on_layer) {
           if (shape->getNet() == net) {
+            shape->setGridComponent(pin_owner);
             layer_shapes.insert(shape);
           }
         }
