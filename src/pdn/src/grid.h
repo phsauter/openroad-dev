@@ -300,7 +300,7 @@ class InstanceGrid : public Grid
                              bool apply_vertical);
   bool hasHalo() const;
   void checkHalo() const;
-  Halo suggestHalo(const std::vector<odb::Rect>& rows) const;
+  Halo suggestHalo(odb::dbInst* inst, const std::vector<odb::Rect>& rows) const;
 };
 
 class DummyInstanceGrid : public Grid
