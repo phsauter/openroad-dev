@@ -202,6 +202,46 @@ void PdnGen::trimShapes()
   auto grids = getGrids();
 
   odb::PtrMap<odb::dbTechLayer, std::unique_ptr<TechLayer>> tech_layers;
+  Shape::ShapeTreeMap all_shapes;
+
+  for (auto* grid : grids) {
+    for (const auto& [layer, grid_shapes] : grid->getShapes()) {
+      auto& layer_shapes = all_shapes[layer];
+      layer_shapes.insert(grid_shapes.begin(), grid_shapes.end());
+    }
+  }
+
+  auto same_domain = [](const ShapePtr& shape, const ShapePtr& other) {
+    auto* component = shape->getGridComponent();
+    auto* other_component = other->getGridComponent();
+    return component == nullptr || other_component == nullptr
+           || component->getDomain() == other_component->getDomain();
+  };
+
+  auto add_same_layer_connections = [&all_shapes, &same_domain](
+                                        const ShapePtr& shape,
+                                        odb::Rect& rect) {
+    auto layer_shapes = all_shapes.find(shape->getLayer());
+    if (layer_shapes == all_shapes.end()) {
+      return;
+    }
+    for (auto it
+         = layer_shapes->second.qbegin(bgi::intersects(shape->getRect()));
+         it != layer_shapes->second.qend();
+         it++) {
+      const auto& other = *it;
+      if (other == shape) {
+        continue;
+      }
+      if (other->getNet() != shape->getNet() || !same_domain(shape, other)) {
+        continue;
+      }
+      const odb::Rect connection = shape->getRect().intersect(other->getRect());
+      if (!connection.isInverted()) {
+        rect.merge(connection);
+      }
+    }
+  };
 
   for (auto* grid : grids) {
     if (grid->type() == Grid::kExisting) {
@@ -221,7 +261,8 @@ void PdnGen::trimShapes()
             = pin_layers.find(shape->getLayer()) != pin_layers.end();
 
         std::unique_ptr<Shape> new_shape = nullptr;
-        const odb::Rect min_rect = shape->getMinimumRect();
+        odb::Rect min_rect = shape->getMinimumRect();
+        add_same_layer_connections(shape, min_rect);
         auto& layer = tech_layers[shape->getLayer()];
         if (layer == nullptr) {
           layer = std::make_unique<TechLayer>(shape->getLayer());

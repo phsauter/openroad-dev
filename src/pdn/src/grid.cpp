@@ -865,23 +865,32 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
   std::set<ViaPtr> remove_vias;
   // remove vias with obstructions in their stack
   for (const auto& via : vias) {
+    auto* via_net = via->getNet();
     for (auto* layer : via->getConnect()->getIntermediteLayers()) {
       const auto& search_obs = search_obstructions[layer];
       if (search_obs.qbegin(
               bgi::intersects(via->getArea())
-              && bgi::satisfies([this, layer](const ShapePtr& other) -> bool {
-                   if (other->shapeType() != Shape::kGridObs) {
-                     return true;
-                   }
-                   // only consider obstructions on routing layers as blocking
-                   // for grid obstructions
-                   if (layer->getType() != odb::dbTechLayerType::ROUTING) {
-                     return false;
-                   }
-                   const GridObsShape* shape
-                       = static_cast<GridObsShape*>(other.get());
-                   return !shape->belongsTo(this);
-                 }))
+              && bgi::satisfies(
+                  [this, layer, via_net](const ShapePtr& other) -> bool {
+                    if (other->getNet() == via_net) {
+                      auto* component = other->getGridComponent();
+                      if (component == nullptr
+                          || component->getDomain() == getDomain()) {
+                        return false;
+                      }
+                    }
+                    if (other->shapeType() != Shape::kGridObs) {
+                      return true;
+                    }
+                    // only consider obstructions on routing layers as blocking
+                    // for grid obstructions
+                    if (layer->getType() != odb::dbTechLayerType::ROUTING) {
+                      return false;
+                    }
+                    const GridObsShape* shape
+                        = static_cast<GridObsShape*>(other.get());
+                    return !shape->belongsTo(this);
+                  }))
           != search_obs.qend()) {
         remove_vias.insert(via);
         via->markFailed(FailedViaReason::kObstructed);
