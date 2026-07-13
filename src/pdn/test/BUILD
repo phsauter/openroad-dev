@@ -96,6 +96,7 @@ COMPULSORY_TESTS = [
     "macros_cells_via_failure",
     "macros_different_nets",
     "macros_grid_check",
+    "macros_group_connect_to_grid",
     "macros_grid_not_used",
     "macros_grid_through",
     "macros_grid_through_without_middle",

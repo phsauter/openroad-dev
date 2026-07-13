@@ -12,6 +12,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "connect.h"
 #include "domain.h"
 #include "grid.h"
+#include "grid_component.h"
 #include "gui/gui.h"
 #include "odb/PtrSetMap.h"
 #include "odb/db.h"
@@ -39,6 +41,18 @@
 namespace pdn {
 
 using utl::Logger;
+
+namespace {
+
+void addGridShapes(Shape::ShapeTreeMap& shapes, Grid* grid)
+{
+  for (const auto& [layer, grid_shapes] : grid->getShapes()) {
+    shapes[layer].insert(grid_shapes.begin(), grid_shapes.end());
+  }
+  grid->getSwitchedPowerShapes(shapes);
+}
+
+}  // namespace
 
 PdnGen::PdnGen(odb::dbDatabase* db, Logger* logger) : db_(db), logger_(logger)
 {
@@ -120,15 +134,148 @@ void PdnGen::buildGrids(bool trim)
     debugPrint(
         logger_, utl::PDN, "Make", 2, "Build start grid - {}", grid->getName());
     grid->makeShapes(all_shapes, block_obs);
-    for (const auto& [layer, shapes] : grid->getShapes()) {
-      auto& all_shapes_layer = all_shapes[layer];
-      for (auto& shape : shapes) {
-        all_shapes_layer.insert(shape);
-      }
-    }
+    addGridShapes(all_shapes, grid);
     grid->getObstructions(block_obs);
     debugPrint(
         logger_, utl::PDN, "Make", 2, "Build end grid - {}", grid->getName());
+  }
+
+  auto remove_grid_shapes = [](Shape::ShapeTreeMap& other_shapes, Grid* grid) {
+    for (const auto& [layer, shapes] : grid->getShapes()) {
+      auto other_layer = other_shapes.find(layer);
+      if (other_layer == other_shapes.end()) {
+        continue;
+      }
+      for (const auto& shape : shapes) {
+        other_layer->second.remove(shape);
+      }
+    }
+  };
+
+  auto shape_grid = [](const ShapePtr& shape) -> Grid* {
+    auto* component = shape->getGridComponent();
+    if (component == nullptr) {
+      return nullptr;
+    }
+    return component->getGrid();
+  };
+
+  auto overlaps_extension
+      = [](const Shape* shape, const odb::Rect& target) -> bool {
+    const odb::Rect& rect = shape->getRect();
+    if (shape->isHorizontal()) {
+      return rect.yMin() < target.yMax() && target.yMin() < rect.yMax();
+    }
+    if (shape->isVertical()) {
+      return rect.xMin() < target.xMax() && target.xMin() < rect.xMax();
+    }
+    return false;
+  };
+
+  auto cross_grid_ring
+      = [&overlaps_extension, &shape_grid](
+            Grid* grid, const ShapePtr& shape, const ShapePtr& ring) -> Grid* {
+    if (ring->getType() != odb::dbWireShapeType::RING
+        || shape->getNet() != ring->getNet()) {
+      return nullptr;
+    }
+    Grid* ring_grid = shape_grid(ring);
+    if (ring_grid == nullptr || ring_grid == grid
+        || ring_grid->getDomain() != grid->getDomain()) {
+      return nullptr;
+    }
+    if (!shape->getRect().overlaps(ring->getRect())
+        && !overlaps_extension(shape.get(), ring->getRect())) {
+      return nullptr;
+    }
+    return ring_grid;
+  };
+
+  auto is_pad_connect = [](const ShapePtr& shape) {
+    auto* component = shape->getGridComponent();
+    return component != nullptr
+           && component->type() == GridComponent::kPadConnect;
+  };
+
+  auto cross_grid_ring_targets = [&cross_grid_ring, &is_pad_connect](
+                                     Grid* grid,
+                                     const Shape::ShapeTreeMap& other_shapes) {
+    bool has_target = false;
+    std::set<Connect*> connects;
+    for (const auto& [layer, shapes] : grid->getShapes()) {
+      for (const auto& shape : shapes) {
+        if (shape->getType() == odb::dbWireShapeType::RING
+            || is_pad_connect(shape)) {
+          continue;
+        }
+        auto target_layers = grid->connectableLayers(layer);
+        target_layers.insert(layer);
+        for (const auto& [ring_layer, rings] : other_shapes) {
+          for (const auto& ring : rings) {
+            Grid* ring_grid = cross_grid_ring(grid, shape, ring);
+            if (ring_grid == nullptr) {
+              continue;
+            }
+            if (target_layers.find(ring_layer) != target_layers.end()) {
+              has_target = true;
+            }
+            for (const auto& connect : ring_grid->getConnect()) {
+              if ((connect->getLowerLayer() == layer
+                   && connect->getUpperLayer() == ring_layer)
+                  || (connect->getUpperLayer() == layer
+                      && connect->getLowerLayer() == ring_layer)) {
+                connects.insert(connect.get());
+              }
+            }
+          }
+        }
+      }
+    }
+    return std::make_pair(
+        has_target, std::vector<Connect*>(connects.begin(), connects.end()));
+  };
+
+  auto repair_cross_grid_vias = [&]() {
+    bool repaired = false;
+    for (auto* grid : grids) {
+      Shape::ShapeTreeMap other_shapes = all_shapes;
+      remove_grid_shapes(other_shapes, grid);
+      const auto [has_target, extra_connects]
+          = cross_grid_ring_targets(grid, other_shapes);
+      if (!has_target && extra_connects.empty()) {
+        continue;
+      }
+      repaired
+          |= grid->makeVias(other_shapes, block_obs, block_obs, extra_connects);
+    }
+    return repaired;
+  };
+
+  if (repair_cross_grid_vias()) {
+    Shape::ShapeTreeMap repaired_shapes;
+    for (auto* grid : grids) {
+      addGridShapes(repaired_shapes, grid);
+    }
+    all_shapes = std::move(repaired_shapes);
+
+    repair_cross_grid_vias();
+  }
+
+  std::set<
+      std::tuple<odb::dbNet*, odb::dbTechLayer*, odb::dbTechLayer*, odb::Rect>>
+      vias_seen;
+  for (auto* grid : grids) {
+    std::vector<ViaPtr> vias;
+    grid->getVias(vias);
+    for (const auto& via : vias) {
+      const auto key = std::make_tuple(via->getNet(),
+                                       via->getLowerLayer(),
+                                       via->getUpperLayer(),
+                                       via->getArea());
+      if (!vias_seen.insert(key).second) {
+        grid->removeVia(via);
+      }
+    }
   }
 
   updateVias();
@@ -177,6 +324,7 @@ void PdnGen::updateVias()
 
   const auto grids = getGrids();
 
+  std::vector<ViaPtr> all_vias;
   for (auto* grid : grids) {
     for (const auto& [layer, shapes] : grid->getShapes()) {
       for (const auto& shape : shapes) {
@@ -184,13 +332,12 @@ void PdnGen::updateVias()
       }
     }
 
-    std::vector<ViaPtr> all_vias;
     grid->getVias(all_vias);
+  }
 
-    for (const auto& via : all_vias) {
-      via->getLowerShape()->addVia(via);
-      via->getUpperShape()->addVia(via);
-    }
+  for (const auto& via : all_vias) {
+    via->getLowerShape()->addVia(via);
+    via->getUpperShape()->addVia(via);
   }
 
   debugPrint(logger_, utl::PDN, "Make", 2, "Update vias - end");
@@ -205,10 +352,7 @@ void PdnGen::trimShapes()
   Shape::ShapeTreeMap all_shapes;
 
   for (auto* grid : grids) {
-    for (const auto& [layer, grid_shapes] : grid->getShapes()) {
-      auto& layer_shapes = all_shapes[layer];
-      layer_shapes.insert(grid_shapes.begin(), grid_shapes.end());
-    }
+    addGridShapes(all_shapes, grid);
   }
 
   auto same_domain = [](const ShapePtr& shape, const ShapePtr& other) {
