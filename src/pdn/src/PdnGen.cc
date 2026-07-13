@@ -208,14 +208,21 @@ void PdnGen::buildGrids(bool trim)
     return ring_grid;
   };
 
-  auto cross_grid_ring_targets = [&cross_grid_ring](
+  auto is_pad_connect = [](const ShapePtr& shape) {
+    auto* component = shape->getGridComponent();
+    return component != nullptr
+           && component->type() == GridComponent::kPadConnect;
+  };
+
+  auto cross_grid_ring_targets = [&cross_grid_ring, &is_pad_connect](
                                      Grid* grid,
                                      const Shape::ShapeTreeMap& other_shapes) {
     bool has_target = false;
     std::set<Connect*> connects;
     for (const auto& [layer, shapes] : grid->getShapes()) {
       for (const auto& shape : shapes) {
-        if (shape->getType() == odb::dbWireShapeType::RING) {
+        if (shape->getType() == odb::dbWireShapeType::RING
+            || is_pad_connect(shape)) {
           continue;
         }
         auto target_layers = grid->connectableLayers(layer);
