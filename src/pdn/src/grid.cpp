@@ -1146,12 +1146,15 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
   // remove vias with obstructions in their stack
   for (const auto& via : vias) {
     auto* via_net = via->getNet();
+    auto* lower_component = via->getLowerShape()->getGridComponent();
+    auto* upper_component = via->getUpperShape()->getGridComponent();
     for (auto* layer : via->getConnect()->getIntermediteLayers()) {
       const auto& search_obs = search_obstructions[layer];
       if (search_obs.qbegin(
               bgi::intersects(via->getArea())
               && bgi::satisfies(
-                  [this, layer, via_net](const ShapePtr& other) -> bool {
+                  [this, layer, via_net, lower_component, upper_component](
+                      const ShapePtr& other) -> bool {
                     if (other->getNet() == via_net) {
                       auto* component = other->getGridComponent();
                       if (component == nullptr
@@ -1169,7 +1172,14 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
                     }
                     const GridObsShape* shape
                         = static_cast<GridObsShape*>(other.get());
-                    return !shape->belongsTo(this);
+                    const Grid* obs_grid = shape->getGrid();
+                    return !shape->belongsTo(this)
+                           && (obs_grid->type() != Grid::kInstance
+                               || ((lower_component == nullptr
+                                    || lower_component->getGrid() != obs_grid)
+                                   && (upper_component == nullptr
+                                       || upper_component->getGrid()
+                                              != obs_grid)));
                   }))
           != search_obs.qend()) {
         remove_vias.insert(via);
