@@ -102,6 +102,7 @@ class Grid
   void removeVia(const ViaPtr& via);
   // remove all vias which are invalid
   void removeInvalidVias();
+  bool removeFailedPadHops() const;
 
   bool startsWithPower() const { return starts_with_power_; }
   bool startsWithGround() const { return !startsWithPower(); }

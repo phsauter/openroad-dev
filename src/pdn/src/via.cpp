@@ -2948,9 +2948,10 @@ bool Via::startsBelow(const ViaPtr& via) const
   return connect_->startsBelow(via->getConnect());
 }
 
-void Via::writeToDb(odb::dbSWire* wire,
-                    odb::dbBlock* block,
-                    const Shape::ObstructionTreeMap& obstructions)
+odb::PtrSet<odb::dbSBox> Via::writeToDb(
+    odb::dbSWire* wire,
+    odb::dbBlock* block,
+    const Shape::ObstructionTreeMap& obstructions)
 {
   odb::dbWireShapeType type = lower_->getType();
 
@@ -2964,7 +2965,7 @@ void Via::writeToDb(odb::dbSWire* wire,
 
   if (shapes.bottom.empty() && shapes.middle.empty() && shapes.top.empty()) {
     markFailed(FailedViaReason::kBuild);
-    return;
+    return {};
   }
 
   auto check_shapes
@@ -3144,6 +3145,16 @@ void Via::writeToDb(odb::dbSWire* wire,
         lower_->getNet()->getName());
     markFailed(FailedViaReason::kRipup);
   }
+
+  odb::PtrSet<odb::dbSBox> db_shapes;
+  for (const auto& layer_shapes : {shapes.bottom, shapes.middle, shapes.top}) {
+    for (const auto& [rect, shape] : layer_shapes) {
+      if (!ripup_shapes.contains(shape)) {
+        db_shapes.insert(shape);
+      }
+    }
+  }
+  return db_shapes;
 }
 
 std::string Via::getDisplayText() const

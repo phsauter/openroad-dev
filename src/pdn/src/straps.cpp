@@ -644,6 +644,43 @@ bool PadDirectConnectionStraps::canConnect() const
          && type_ != ConnectionType::kNone;
 }
 
+odb::Rect PadDirectConnectionStraps::makePadRoutePin(
+    odb::dbTechLayer* source_layer,
+    odb::dbTechLayer* route_layer,
+    const odb::Rect& pin_rect,
+    const odb::Rect& inst_rect) const
+{
+  const auto& connects = getGrid()->getConnect();
+  const auto connect = std::ranges::find_if(
+      connects, [source_layer, route_layer](const auto& connect) {
+        return (connect->getLowerLayer() == source_layer
+                && connect->getUpperLayer() == route_layer)
+               || (connect->getLowerLayer() == route_layer
+                   && connect->getUpperLayer() == source_layer);
+      });
+  const bool is_horizontal = isConnectHorizontal();
+  const int width = is_horizontal ? pin_rect.dy() : pin_rect.dx();
+  const int length = std::max(width,
+                              std::max((*connect)->getMinWidth(source_layer),
+                                       (*connect)->getMinWidth(route_layer)));
+  const int spacing = TechLayer(route_layer).getSpacing(width, length);
+  odb::Rect route_pin = pin_rect;
+  if (is_horizontal) {
+    const int x = pad_edge_ == odb::dbDirection::WEST
+                      ? inst_rect.xMax() + spacing
+                      : inst_rect.xMin() - spacing;
+    route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? x : x - length);
+    route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? x + length : x);
+  } else {
+    const int y = pad_edge_ == odb::dbDirection::SOUTH
+                      ? inst_rect.yMax() + spacing
+                      : inst_rect.yMin() - spacing;
+    route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? y : y - length);
+    route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? y + length : y);
+  }
+  return route_pin;
+}
+
 void PadDirectConnectionStraps::initialize(ConnectionType type)
 {
   pins_.clear();
@@ -1080,7 +1117,9 @@ ShapePtr PadDirectConnectionStraps::getClosestShape(
     }
 
     // determine if this is closer
-    if (closest_dist > new_dist) {
+    if (closest_dist > new_dist
+        || (closest_dist == new_dist
+            && shape_rect < closest_shape->getRect())) {
       closest_shape = shape;
       closest_dist = new_dist;
     }
@@ -1239,18 +1278,7 @@ void PadDirectConnectionStraps::makeShapesFacingCore(
     odb::Rect route_pin = pin_rect;
     limit_width(route_pin, layer);
     limit_width(route_pin, route_layer);
-    const int width = route_layer->getMinWidth();
-    if (is_horizontal_strap) {
-      const int x = pad_edge_ == odb::dbDirection::WEST ? inst_rect.xMax()
-                                                        : inst_rect.xMin();
-      route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? x : x - width);
-      route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? x + width : x);
-    } else {
-      const int y = pad_edge_ == odb::dbDirection::SOUTH ? inst_rect.yMax()
-                                                         : inst_rect.yMin();
-      route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? y : y - width);
-      route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? y + width : y);
-    }
+    route_pin = makePadRoutePin(layer, route_layer, route_pin, inst_rect);
 
     odb::Rect escape_rect = pin_rect;
     escape_rect.merge(route_pin);
@@ -1400,19 +1428,8 @@ void PadDirectConnectionStraps::makeShapesOverPads(
         getLayer(), getDirection(), getGrid()->connectableLayers(getLayer()));
 
     if (route_layer != nullptr) {
-      odb::Rect route_pin = pin_shape;
-      const int width = route_layer->getMinWidth();
-      if (is_horizontal) {
-        const int x = pad_edge_ == odb::dbDirection::WEST ? inst_rect.xMax()
-                                                          : inst_rect.xMin();
-        route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? x : x - width);
-        route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? x + width : x);
-      } else {
-        const int y = pad_edge_ == odb::dbDirection::SOUTH ? inst_rect.yMax()
-                                                           : inst_rect.yMin();
-        route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? y : y - width);
-        route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? y + width : y);
-      }
+      const odb::Rect route_pin
+          = makePadRoutePin(getLayer(), route_layer, pin_shape, inst_rect);
 
       odb::Rect escape_rect = pin_shape;
       escape_rect.merge(route_pin);
@@ -1532,7 +1549,8 @@ void PadDirectConnectionStraps::cutShapes(
       if (inst_shape.contains(shape->getRect())) {
         // reject shapes that only connect to pad
         remove_shapes.push_back(shape.get());
-      } else if (!inst_shape.intersects(shape->getRect())) {
+      } else if (!inst_shape.intersects(shape->getRect())
+                 && !pad_hop_escape_shapes_.contains(shape.get())) {
         // reject shapes that do not connect to pad
         remove_shapes.push_back(shape.get());
       }
@@ -1588,6 +1606,34 @@ void PadDirectConnectionStraps::registerPadHop(Shape* route, Shape* escape)
   }
 
   pad_hop_escape_shapes_[route] = escape;
+}
+
+bool PadDirectConnectionStraps::removeFailedPadHops()
+{
+  auto connected = [](Shape* shape, Shape* target) {
+    return std::ranges::any_of(
+        shape->getVias(), [shape, target](const auto& via) {
+          return !via->isFailed()
+                 && ((via->getLowerShape().get() == shape
+                      && via->getUpperShape().get() == target)
+                     || (via->getLowerShape().get() == target
+                         && via->getUpperShape().get() == shape));
+        });
+  };
+
+  std::vector<Shape*> remove;
+  for (const auto& [route, escape] : pad_hop_escape_shapes_) {
+    const auto target = target_shapes_.find(route);
+    if (!connected(route, escape) || target == target_shapes_.end()
+        || (route->getLayer() != target->second->getLayer()
+            && !connected(route, target->second))) {
+      remove.push_back(route);
+    }
+  }
+  for (auto* shape : remove) {
+    removeShape(shape);
+  }
+  return !remove.empty();
 }
 
 void PadDirectConnectionStraps::erasePadConnectionMetadata(Shape* shape)
