@@ -29,6 +29,7 @@
 #include "shape.h"
 #include "techlayer.h"
 #include "utl/Logger.h"
+#include "via.h"
 
 namespace pdn {
 
@@ -990,6 +991,7 @@ void PadDirectConnectionStraps::makeShapes(
              getName());
   target_shapes_.clear();
   target_pin_shape_.clear();
+  pad_hop_escape_shapes_.clear();
   switch (type_) {
     case ConnectionType::kNone:
       break;
@@ -1257,9 +1259,13 @@ void PadDirectConnectionStraps::makeShapesFacingCore(
     shape->setAllowsNonPreferredDirectionChange();
     shape->addITermConnection(pin_rect.intersect(escape_rect));
     const auto escape = addShape(std::move(shape));
-    if (escape != nullptr
-        && add_strap(route_layer, route_pin, target_shape, false) == nullptr) {
-      removeShape(escape.get());
+    if (escape != nullptr) {
+      const auto route = add_strap(route_layer, route_pin, target_shape, false);
+      if (route == nullptr) {
+        removeShape(escape.get());
+      } else {
+        registerPadHop(route.get(), escape.get());
+      }
     }
   }
 }
@@ -1429,6 +1435,7 @@ void PadDirectConnectionStraps::makeShapesOverPads(
           if (route != nullptr) {
             target_shapes_[route.get()] = closest_shape.get();
             target_pin_shape_[route.get()] = org_pin_shape;
+            registerPadHop(route.get(), escape.get());
             return;
           }
         }
@@ -1536,6 +1543,195 @@ void PadDirectConnectionStraps::cutShapes(
   for (auto* shape : remove_shapes) {
     removeShape(shape);
   }
+}
+
+Shape* PadDirectConnectionStraps::getPadHopPairedShape(Shape* shape) const
+{
+  const auto route = pad_hop_escape_shapes_.find(shape);
+  if (route != pad_hop_escape_shapes_.end()) {
+    return route->second;
+  }
+
+  for (const auto& [route_shape, escape_shape] : pad_hop_escape_shapes_) {
+    if (escape_shape == shape) {
+      return route_shape;
+    }
+  }
+
+  return nullptr;
+}
+
+bool PadDirectConnectionStraps::isPadHopShape(Shape* shape) const
+{
+  return getPadHopPairedShape(shape) != nullptr;
+}
+
+Shape* PadDirectConnectionStraps::getPadHopRouteShape(Shape* shape) const
+{
+  if (pad_hop_escape_shapes_.contains(shape)) {
+    return shape;
+  }
+
+  for (const auto& [route_shape, escape_shape] : pad_hop_escape_shapes_) {
+    if (escape_shape == shape) {
+      return route_shape;
+    }
+  }
+
+  return nullptr;
+}
+
+void PadDirectConnectionStraps::registerPadHop(Shape* route, Shape* escape)
+{
+  if (route == nullptr || escape == nullptr) {
+    return;
+  }
+
+  pad_hop_escape_shapes_[route] = escape;
+}
+
+void PadDirectConnectionStraps::erasePadConnectionMetadata(Shape* shape)
+{
+  target_shapes_.erase(shape);
+  target_pin_shape_.erase(shape);
+  pad_hop_escape_shapes_.erase(shape);
+
+  for (auto it = pad_hop_escape_shapes_.begin();
+       it != pad_hop_escape_shapes_.end();) {
+    if (it->second == shape) {
+      it = pad_hop_escape_shapes_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void PadDirectConnectionStraps::removeShape(Shape* shape)
+{
+  Shape* paired_shape = getPadHopPairedShape(shape);
+
+  erasePadConnectionMetadata(shape);
+  GridComponent::removeShape(shape);
+
+  if (paired_shape != nullptr && paired_shape != shape) {
+    erasePadConnectionMetadata(paired_shape);
+    GridComponent::removeShape(paired_shape);
+  }
+}
+
+void PadDirectConnectionStraps::replaceShape(Shape* shape,
+                                             std::unique_ptr<Shape> replacement)
+{
+  std::vector<std::unique_ptr<Shape>> replacements;
+  replacements.push_back(std::move(replacement));
+  replaceShape(shape, replacements);
+}
+
+ShapePtr PadDirectConnectionStraps::replacePadHopShape(
+    Shape* shape,
+    std::unique_ptr<Shape> replacement)
+{
+  auto vias = shape->getVias();
+
+  GridComponent::removeShape(shape);
+
+  const auto new_shape = addShape(std::move(replacement));
+  if (new_shape == nullptr) {
+    return nullptr;
+  }
+
+  for (const auto& via : vias) {
+    if (via->getArea().intersects(new_shape->getRect())) {
+      Connect* connect = via->getConnect();
+      if (connect->getLowerLayer() == new_shape->getLayer()) {
+        via->setLowerShape(new_shape);
+      } else if (connect->getUpperLayer() == new_shape->getLayer()) {
+        via->setUpperShape(new_shape);
+      }
+    }
+  }
+
+  return new_shape;
+}
+
+void PadDirectConnectionStraps::replaceShape(
+    Shape* shape,
+    std::vector<std::unique_ptr<Shape>>& replacements)
+{
+  const auto route_it = pad_hop_escape_shapes_.find(shape);
+  if (route_it != pad_hop_escape_shapes_.end()) {
+    Shape* route_shape = shape;
+    Shape* escape_shape = route_it->second;
+    const auto target_it = target_shapes_.find(route_shape);
+    const auto pin_it = target_pin_shape_.find(route_shape);
+
+    if (escape_shape == nullptr || target_it == target_shapes_.end()
+        || pin_it == target_pin_shape_.end()) {
+      removeShape(shape);
+      return;
+    }
+
+    std::vector<std::unique_ptr<Shape>> valid_replacements;
+    for (auto& replacement : replacements) {
+      if (replacement->getRect().intersects(escape_shape->getRect())
+          && replacement->getRect().intersects(target_it->second->getRect())) {
+        valid_replacements.push_back(std::move(replacement));
+      }
+    }
+
+    if (valid_replacements.size() != 1) {
+      removeShape(route_shape);
+      return;
+    }
+
+    Shape* target_shape = target_it->second;
+    const odb::Rect target_pin = pin_it->second;
+    pad_hop_escape_shapes_.erase(route_shape);
+    target_shapes_.erase(route_shape);
+    target_pin_shape_.erase(route_shape);
+
+    const auto new_route
+        = replacePadHopShape(route_shape, std::move(valid_replacements[0]));
+    if (new_route == nullptr) {
+      removeShape(escape_shape);
+      return;
+    }
+
+    target_shapes_[new_route.get()] = target_shape;
+    target_pin_shape_[new_route.get()] = target_pin;
+    registerPadHop(new_route.get(), escape_shape);
+    return;
+  }
+
+  Shape* route_shape = getPadHopRouteShape(shape);
+  if (route_shape != nullptr) {
+    std::vector<std::unique_ptr<Shape>> valid_replacements;
+    for (auto& replacement : replacements) {
+      if (replacement->hasITermConnections()
+          && replacement->getRect().intersects(route_shape->getRect())) {
+        valid_replacements.push_back(std::move(replacement));
+      }
+    }
+
+    if (valid_replacements.size() != 1) {
+      removeShape(shape);
+      return;
+    }
+
+    pad_hop_escape_shapes_.erase(route_shape);
+    const auto new_escape
+        = replacePadHopShape(shape, std::move(valid_replacements[0]));
+    if (new_escape == nullptr) {
+      removeShape(route_shape);
+      return;
+    }
+
+    registerPadHop(route_shape, new_escape.get());
+    return;
+  }
+
+  erasePadConnectionMetadata(shape);
+  GridComponent::replaceShape(shape, replacements);
 }
 
 void PadDirectConnectionStraps::unifyConnectionTypes(
@@ -1659,6 +1855,31 @@ bool PadDirectConnectionStraps::refineShapes(
   refine.erase(first, last);
 
   for (const auto& refine_shape : refine) {
+    if (isPadHopShape(refine_shape.get())) {
+      auto* paired_shape = getPadHopPairedShape(refine_shape.get());
+      ShapePtr paired_shape_ptr = nullptr;
+      if (paired_shape != nullptr) {
+        for (const auto& [layer, shapes] : getShapes()) {
+          for (const auto& shape : shapes) {
+            if (shape.get() == paired_shape) {
+              paired_shape_ptr = shape;
+              break;
+            }
+          }
+        }
+      }
+
+      removeShape(refine_shape.get());
+
+      all_shapes[refine_shape->getLayer()].remove(refine_shape);
+      all_obstructions[refine_shape->getLayer()].remove(refine_shape);
+      if (paired_shape_ptr != nullptr) {
+        all_shapes[paired_shape_ptr->getLayer()].remove(paired_shape_ptr);
+        all_obstructions[paired_shape_ptr->getLayer()].remove(paired_shape_ptr);
+      }
+      continue;
+    }
+
     std::unique_ptr<Shape> shape(refine_shape->copy());
     const auto& target_pin = target_pin_shape_[refine_shape.get()];
     removeShape(refine_shape.get());
