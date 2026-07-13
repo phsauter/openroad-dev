@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "boost/polygon/polygon.hpp"
 #include "domain.h"
 #include "grid.h"
 #include "odb/db.h"
@@ -18,6 +19,14 @@
 #include "utl/Logger.h"
 
 namespace pdn {
+
+namespace {
+
+using Polygon90 = boost::polygon::polygon_90_with_holes_data<int>;
+using Polygon90Set = boost::polygon::polygon_90_set_data<int>;
+using Rectangle = boost::polygon::rectangle_data<int>;
+
+}  // namespace
 
 Rings::Rings(Grid* grid, const Layer& layer0, const Layer& layer1)
     : GridComponent(grid), layer0_(layer0), layer1_(layer1)
@@ -183,14 +192,25 @@ void Rings::setExtendToBoundary(bool value)
 
 odb::Rect Rings::getInnerRingOutline() const
 {
-  auto* grid = getGrid();
-  odb::Rect core = grid->getDomainArea();
-  core.set_xlo(core.xMin() - offset_[0]);
-  core.set_ylo(core.yMin() - offset_[1]);
-  core.set_xhi(core.xMax() + offset_[2]);
-  core.set_yhi(core.yMax() + offset_[3]);
+  odb::Rect core;
+  core.mergeInit();
+  for (const auto& rect : getInnerRingOutlines()) {
+    core.merge(rect);
+  }
 
   return core;
+}
+
+std::vector<odb::Rect> Rings::getInnerRingOutlines() const
+{
+  std::vector<odb::Rect> cores = getGrid()->getDomainAreaRects();
+  for (auto& core : cores) {
+    core.set_xlo(core.xMin() - offset_[0]);
+    core.set_ylo(core.yMin() - offset_[1]);
+    core.set_xhi(core.xMax() + offset_[2]);
+    core.set_yhi(core.yMax() + offset_[3]);
+  }
+  return cores;
 }
 
 void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
@@ -208,42 +228,135 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
 
   const auto nets = getNets();
 
-  odb::Rect boundary;
-  if (extend_to_boundary_) {
-    boundary = grid->getGridBoundary();
-  }
+  const auto cores = getInnerRingOutlines();
 
-  const odb::Rect core = getInnerRingOutline();
-
-  bool single_layer_ring = false;
-  if (layer0_.layer == layer1_.layer) {
-    single_layer_ring = true;
-  }
+  const bool single_layer_ring = layer0_.layer == layer1_.layer;
+  auto lock_shapes = [&]() {
+    if (!single_layer_ring) {
+      return;
+    }
+    for (const auto& [layer, shapes] : getShapes()) {
+      for (const auto& shape : shapes) {
+        shape->setLocked();
+      }
+    }
+  };
 
   using LayerPair = std::pair<Layer*, Layer*>;
   const std::array<LayerPair, 2> build_layers{LayerPair{&layer0_, &layer1_},
                                               LayerPair{&layer1_, &layer0_}};
 
+  if (!extend_to_boundary_) {
+    using boost::polygon::operators::operator+=;
+
+    Polygon90Set core_set;
+    for (const auto& core_rect : cores) {
+      core_set += Rectangle(core_rect.xMin(),
+                            core_rect.yMin(),
+                            core_rect.xMax(),
+                            core_rect.yMax());
+    }
+    int hor_width;
+    int ver_width;
+    getTotalWidth(hor_width, ver_width);
+    const int space = std::max(layer0_.spacing, layer1_.spacing);
+    const int x_gate = ver_width + space;
+    const int y_gate = hor_width + space;
+    core_set.bloat(x_gate, x_gate, y_gate, y_gate);
+    core_set.shrink(x_gate, x_gate, y_gate, y_gate);
+
+    std::vector<Polygon90> polygons;
+    core_set.get_polygons(polygons);
+
+    auto add_edge_shapes = [&](const auto& polygon,
+                               Layer* layer_def,
+                               Layer* layer_other,
+                               bool make_horizontal) {
+      const int width = layer_def->width;
+      const int pitch = layer_def->spacing + width;
+      const int other_width = layer_other->width;
+      const int other_pitch = layer_other->spacing + other_width;
+      const bool ccw = boost::polygon::winding(polygon)
+                       == boost::polygon::COUNTERCLOCKWISE;
+
+      std::vector<Polygon90::point_type> points(polygon.begin(), polygon.end());
+      for (int edge = 0; edge < points.size(); edge++) {
+        const auto& pt0 = points[edge];
+        const auto& pt1 = points[(edge + 1) % points.size()];
+        const bool horizontal = pt0.y() == pt1.y();
+        if (horizontal != make_horizontal) {
+          continue;
+        }
+
+        for (int idx = 0; idx < nets.size(); idx++) {
+          const int offset = idx * pitch;
+          const int end_offset = other_width + idx * other_pitch;
+          odb::Rect rect;
+          if (horizontal) {
+            const int dir = pt1.x() > pt0.x() ? 1 : -1;
+            const int outward = ccw ? -dir : dir;
+            const int y0 = pt0.y();
+            const int y1 = outward < 0 ? y0 - offset - width : y0 + offset;
+            const int y2 = outward < 0 ? y0 - offset : y0 + offset + width;
+            rect = odb::Rect(std::min(pt0.x(), pt1.x()) - end_offset,
+                             y1,
+                             std::max(pt0.x(), pt1.x()) + end_offset,
+                             y2);
+          } else {
+            const int dir = pt1.y() > pt0.y() ? 1 : -1;
+            const int outward = ccw ? dir : -dir;
+            const int x0 = pt0.x();
+            const int x1 = outward < 0 ? x0 - offset - width : x0 + offset;
+            const int x2 = outward < 0 ? x0 - offset : x0 + offset + width;
+            rect = odb::Rect(x1,
+                             std::min(pt0.y(), pt1.y()) - end_offset,
+                             x2,
+                             std::max(pt0.y(), pt1.y()) + end_offset);
+          }
+          addShape(std::make_unique<Shape>(
+              layer_def->layer, nets[idx], rect, odb::dbWireShapeType::RING));
+        }
+      }
+    };
+
+    bool processed_horizontal = false;
+    for (const auto& [layer_def, layer_other] : build_layers) {
+      const bool make_horizontal
+          = (single_layer_ring && !processed_horizontal)
+            || (!single_layer_ring
+                && layer_def->layer->getDirection()
+                       == odb::dbTechLayerDir::HORIZONTAL);
+      processed_horizontal |= make_horizontal;
+      for (const auto& polygon : polygons) {
+        add_edge_shapes(polygon, layer_def, layer_other, make_horizontal);
+        for (auto itr = polygon.begin_holes(); itr != polygon.end_holes();
+             itr++) {
+          add_edge_shapes(*itr, layer_def, layer_other, make_horizontal);
+        }
+      }
+    }
+
+    lock_shapes();
+    return;
+  }
+
+  const odb::Rect boundary = grid->getGridBoundary();
+  const odb::Rect core = getInnerRingOutline();
+
   bool processed_horizontal = false;
-  for (const auto& [layer_def, layer_other] : build_layers) {
+  for (auto* layer_def : {&layer0_, &layer1_}) {
     auto* layer = layer_def->layer;
     const int width = layer_def->width;
     const int pitch = layer_def->spacing + width;
 
-    const int other_width = layer_other->width;
-    const int other_pitch = layer_other->spacing + other_width;
     if ((single_layer_ring && !processed_horizontal)
         || (!single_layer_ring
             && layer->getDirection() == odb::dbTechLayerDir::HORIZONTAL)) {
       processed_horizontal = true;
 
       // bottom
-      int x_start = core.xMin() - other_width;
-      int x_end = core.xMax() + other_width;
-      if (extend_to_boundary_) {
-        x_start = boundary.xMin();
-        x_end = boundary.xMax();
-      }
+      const int x_start = boundary.xMin();
+      const int x_end = boundary.xMax();
       int y_start = core.yMin() - width;
       int y_end = core.yMin();
       for (auto net : nets) {
@@ -252,18 +365,10 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
                                     net,
                                     odb::Rect(x_start, y_start, x_end, y_end),
                                     odb::dbWireShapeType::RING));
-        if (!extend_to_boundary_) {
-          x_start -= other_pitch;
-          x_end += other_pitch;
-        }
         y_start -= pitch;
         y_end -= pitch;
       }
       // top
-      if (!extend_to_boundary_) {
-        x_start = core.xMin() - other_width;
-        x_end = core.xMax() + other_width;
-      }
       y_start = core.yMax();
       y_end = y_start + width;
       for (auto net : nets) {
@@ -272,10 +377,6 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
                                     net,
                                     odb::Rect(x_start, y_start, x_end, y_end),
                                     odb::dbWireShapeType::RING));
-        if (!extend_to_boundary_) {
-          x_start -= other_pitch;
-          x_end += other_pitch;
-        }
         y_start += pitch;
         y_end += pitch;
       }
@@ -283,12 +384,8 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
       // left
       int x_start = core.xMin() - width;
       int x_end = core.xMin();
-      int y_start = core.yMin() - other_width;
-      int y_end = core.yMax() + other_width;
-      if (extend_to_boundary_) {
-        y_start = boundary.yMin();
-        y_end = boundary.yMax();
-      }
+      const int y_start = boundary.yMin();
+      const int y_end = boundary.yMax();
       for (auto net : nets) {
         addShape(
             std::make_unique<Shape>(layer,
@@ -297,18 +394,10 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
                                     odb::dbWireShapeType::RING));
         x_start -= pitch;
         x_end -= pitch;
-        if (!extend_to_boundary_) {
-          y_start -= other_pitch;
-          y_end += other_pitch;
-        }
       }
       // right
       x_start = core.xMax();
       x_end = x_start + width;
-      if (!extend_to_boundary_) {
-        y_start = core.yMin() - other_width;
-        y_end = core.yMax() + other_width;
-      }
       for (auto net : nets) {
         addShape(
             std::make_unique<Shape>(layer,
@@ -317,21 +406,11 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
                                     odb::dbWireShapeType::RING));
         x_start += pitch;
         x_end += pitch;
-        if (!extend_to_boundary_) {
-          y_start -= other_pitch;
-          y_end += other_pitch;
-        }
       }
     }
   }
 
-  if (single_layer_ring) {
-    for (const auto& [layer, shapes] : getShapes()) {
-      for (const auto& shape : shapes) {
-        shape->setLocked();
-      }
-    }
-  }
+  lock_shapes();
 }
 
 std::vector<odb::dbTechLayer*> Rings::getLayers() const

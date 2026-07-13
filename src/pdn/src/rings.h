@@ -66,6 +66,7 @@ class Rings : public GridComponent
   void checkDieArea() const;
 
   odb::Rect getInnerRingOutline() const;
+  std::vector<odb::Rect> getInnerRingOutlines() const;
 };
 
 }  // namespace pdn
