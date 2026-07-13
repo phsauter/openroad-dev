@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "domain.h"
 #include "grid.h"
 #include "odb/PtrSetMap.h"
 #include "odb/db.h"
@@ -1031,6 +1032,17 @@ void Connect::recordFailedVias() const
   odb::dbMarkerCategory* via_category
       = odb::dbMarkerCategory::createOrGet(tool_category, "Via");
 
+  std::vector<ViaPtr> vias;
+  for (const auto& grid : grid_->getDomain()->getGrids()) {
+    grid->getVias(vias);
+  }
+  auto has_built_via = [this, &vias](odb::dbNet* net, const odb::Rect& shape) {
+    return std::ranges::any_of(vias, [this, net, &shape](const ViaPtr& via) {
+      return !via->isFailed() && appliesToVia(via) && via->getNet() == net
+             && via->getArea().overlaps(shape);
+    });
+  };
+
   for (const auto& [reason, shapes] : failed_vias_) {
     std::string reason_str;
     switch (reason) {
@@ -1038,17 +1050,15 @@ void Connect::recordFailedVias() const
         reason_str = "Obstructed";
         break;
       case FailedViaReason::kOverlapping:
-        reason_str = "Overlapping";
-        break;
+      case FailedViaReason::kRecheck:
+        // do not report non-actionable vias
+        continue;
       case FailedViaReason::kBuild:
         reason_str = "Build";
         break;
       case FailedViaReason::kRipup:
         reason_str = "Ripup";
         break;
-      case FailedViaReason::kRecheck:
-        // Do not report recheck vias
-        continue;
       case FailedViaReason::kOther:
         reason_str = "Other";
         break;
@@ -1061,6 +1071,9 @@ void Connect::recordFailedVias() const
         = odb::dbMarkerCategory::createOrGet(via_category, reason_str.c_str());
 
     for (const auto& [net, shape] : shapes) {
+      if (has_built_via(net, shape)) {
+        continue;
+      }
       odb::dbMarker* marker = odb::dbMarker::create(category);
       if (marker == nullptr) {
         continue;
