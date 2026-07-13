@@ -789,11 +789,12 @@ void FollowPinShape::updateTermConnections()
 
 odb::Rect FollowPinShape::getMinimumRect() const
 {
+  const odb::Rect& rect = getRect();
+  const bool is_horizontal = isHorizontal();
+
   odb::Rect min_shape = Shape::getMinimumRect();
 
-  const odb::Rect& rect = getRect();
   // copy width back
-  const bool is_horizontal = isHorizontal();
   if (is_horizontal) {
     min_shape.set_ylo(rect.yMin());
     min_shape.set_yhi(rect.yMax());

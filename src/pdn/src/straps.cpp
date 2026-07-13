@@ -1279,6 +1279,7 @@ void PadDirectConnectionStraps::makeShapesOverPads(
     return;
   }
 
+  added->addITermConnection(org_pin_shape.intersect(added->getRect()));
   target_shapes_[added.get()] = closest_shape.get();
   target_pin_shape_[added.get()] = org_pin_shape;
 }

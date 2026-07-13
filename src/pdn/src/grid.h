@@ -87,13 +87,17 @@ class Grid
   void makeShapes(const Shape::ShapeTreeMap& global_shapes,
                   const Shape::ObstructionTreeMap& obstructions);
   virtual Shape::ShapeTreeMap getShapes() const;
+  void getSwitchedPowerShapes(Shape::ShapeTreeMap& shapes) const;
 
   // make the vias for the this grid
+  bool makeVias(const Shape::ShapeTreeMap& global_shapes,
+                const Shape::ObstructionTreeMap& obstructions,
+                Shape::ObstructionTreeMap& local_obstructions,
+                const std::vector<Connect*>& extra_connects = {},
+                bool repair_rings = false);
   void makeVias(const Shape::ShapeTreeMap& global_shapes,
                 const Shape::ObstructionTreeMap& obstructions,
-                Shape::ObstructionTreeMap& local_obstructions);
-  void makeVias(const Shape::ShapeTreeMap& global_shapes,
-                const Shape::ObstructionTreeMap& obstructions);
+                bool repair_rings = false);
   void getVias(std::vector<ViaPtr>& vias) const;
   void clearVias() { vias_.clear(); }
   void removeVia(const ViaPtr& via);
@@ -173,7 +177,8 @@ class Grid
  protected:
   // find all intersections in the shapes which may become vias
   virtual void getIntersections(std::vector<ViaPtr>& intersections,
-                                const Shape::ShapeTreeMap& shapes) const;
+                                const Shape::ShapeTreeMap& shapes,
+                                bool repair_rings) const;
 
   virtual void cleanupShapes() {}
 
@@ -198,7 +203,9 @@ class Grid
   std::vector<GridComponent*> getGridComponents() const;
   void removeGridComponent(GridComponent* component);
   bool repairVias(const Shape::ShapeTreeMap& global_shapes,
-                  Shape::ObstructionTreeMap& obstructions);
+                  Shape::ObstructionTreeMap& obstructions,
+                  const std::vector<Connect*>& extra_connects,
+                  bool repair_rings);
 };
 
 class CoreGrid : public Grid
@@ -268,7 +275,8 @@ class InstanceGrid : public Grid
   // find all intersections that also overlap with the power/ground pins based
   // on connectivity
   void getIntersections(std::vector<ViaPtr>& vias,
-                        const Shape::ShapeTreeMap& shapes) const override;
+                        const Shape::ShapeTreeMap& shapes,
+                        bool repair_rings) const override;
 
  private:
   odb::dbInst* inst_;
