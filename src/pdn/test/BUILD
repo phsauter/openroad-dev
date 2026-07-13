@@ -128,6 +128,7 @@ COMPULSORY_TESTS = [
     "pads_black_parrot_offset",
     "pads_black_parrot_straps",
     "pads_connect_from_non_pref_edge",
+    "pads_connect_layer_hop_obstruction",
     "pads_connect_no_macro_repair",
     "pads_connect_over_pads_trim",
     "power_switch",
