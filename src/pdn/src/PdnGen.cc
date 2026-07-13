@@ -677,7 +677,7 @@ Grid* PdnGen::instanceGrid(odb::dbInst* inst) const
   for (auto* check_grid : getGrids()) {
     auto* other_grid = dynamic_cast<InstanceGrid*>(check_grid);
     if (other_grid != nullptr) {
-      if (other_grid->getInstance() == inst) {
+      if (other_grid->getInstances().contains(inst)) {
         return check_grid;
       }
     }
@@ -716,8 +716,36 @@ void PdnGen::makeInstanceGrid(
     const std::vector<odb::dbTechLayer*>& generate_obstructions,
     bool is_bump)
 {
-  auto* check_grid = instanceGrid(inst);
-  if (check_grid != nullptr) {
+  makeInstanceGrid(domain,
+                   name,
+                   starts_with,
+                   std::vector<odb::dbInst*>{inst},
+                   halo,
+                   pg_pins_to_boundary,
+                   default_grid,
+                   generate_obstructions,
+                   is_bump,
+                   false);
+}
+
+void PdnGen::makeInstanceGrid(
+    VoltageDomain* domain,
+    const std::string& name,
+    StartsWith starts_with,
+    const std::vector<odb::dbInst*>& insts,
+    const std::array<int, 4>& halo,
+    bool pg_pins_to_boundary,
+    bool default_grid,
+    const std::vector<odb::dbTechLayer*>& generate_obstructions,
+    bool is_bump,
+    bool add_blockage)
+{
+  std::set<Grid*> replace_grids;
+  for (auto* inst : insts) {
+    auto* check_grid = instanceGrid(inst);
+    if (check_grid == nullptr) {
+      continue;
+    }
     if (check_grid->isReplaceable()) {
       // remove the old grid and replace with this one
       debugPrint(logger_,
@@ -728,8 +756,7 @@ void PdnGen::makeInstanceGrid(
                  check_grid->getName(),
                  name,
                  inst->getName());
-      auto* check_domain = check_grid->getDomain();
-      check_domain->removeGrid(check_grid);
+      replace_grids.insert(check_grid);
     } else if (default_grid) {
       // this is a default grid so we can ignore this assignment
       return;
@@ -745,12 +772,16 @@ void PdnGen::makeInstanceGrid(
     }
   }
 
+  for (auto* check_grid : replace_grids) {
+    check_grid->getDomain()->removeGrid(check_grid);
+  }
+
   std::unique_ptr<InstanceGrid> grid = nullptr;
   if (is_bump) {
-    grid = std::make_unique<BumpGrid>(domain, name, inst);
+    grid = std::make_unique<BumpGrid>(domain, name, insts.front());
   } else {
     grid = std::make_unique<InstanceGrid>(
-        domain, name, starts_with == kPower, inst, generate_obstructions);
+        domain, name, starts_with == kPower, insts, generate_obstructions);
   }
   if (!std::ranges::all_of(halo, [](int v) { return v == 0; })) {
     grid->addHalo(halo);
@@ -761,6 +792,15 @@ void PdnGen::makeInstanceGrid(
 
   if (!grid->isValid()) {
     return;
+  }
+
+  if (add_blockage) {
+    const auto group_area = grid->getGridArea();
+    odb::dbBlockage::create(db_->getChip()->getBlock(),
+                            group_area.xMin(),
+                            group_area.yMin(),
+                            group_area.xMax(),
+                            group_area.yMax());
   }
 
   domain->addGrid(std::move(grid));

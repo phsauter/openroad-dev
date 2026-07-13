@@ -510,20 +510,23 @@ bool Grid::repairVias(const Shape::ShapeTreeMap& global_shapes,
       return;
     }
 
-    auto target_obs_filter
-        = [&obs_filter, target, target_grid](const ShapePtr& other) {
-            if (other == target) {
-              return false;
-            }
-            if (!obs_filter(other)) {
-              return false;
-            }
-            if (other->shapeType() != Shape::kGridObs) {
-              return true;
-            }
-            const GridObsShape* shape = static_cast<GridObsShape*>(other.get());
-            return !shape->belongsTo(target_grid);
-          };
+    auto target_obs_filter =
+        [&obs_filter, target, target_grid, extend_test](const ShapePtr& other) {
+          if (other == target) {
+            return false;
+          }
+          if (other->getObstruction().intersects(extend_test->getRect())) {
+            return false;
+          }
+          if (!obs_filter(other)) {
+            return false;
+          }
+          if (other->shapeType() != Shape::kGridObs) {
+            return true;
+          }
+          const GridObsShape* shape = static_cast<GridObsShape*>(other.get());
+          return !shape->belongsTo(target_grid);
+        };
 
     const Shape::ShapeTree* extension_shapes
         = &search_shapes[extend_test->getLayer()];
@@ -788,6 +791,7 @@ void Grid::report() const
 
 void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
                             const Shape::ShapeTreeMap& search_shapes,
+                            const std::vector<Connect*>& extra_connects,
                             bool repair_rings) const
 {
   debugPrint(getLogger(),
@@ -803,8 +807,15 @@ void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
     comp->getConnectableShapes(shapes);
   }
 
-  // loop over connect statements
+  std::vector<Connect*> connects;
+  connects.reserve(connect_.size() + extra_connects.size());
   for (const auto& connect : connect_) {
+    connects.push_back(connect.get());
+  }
+  connects.insert(connects.end(), extra_connects.begin(), extra_connects.end());
+
+  // loop over connect statements
+  for (Connect* connect : connects) {
     odb::dbTechLayer* lower_layer = connect->getLowerLayer();
     odb::dbTechLayer* upper_layer = connect->getUpperLayer();
 
@@ -879,11 +890,8 @@ void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
 
         const odb::Rect via_rect
             = lower_shape->getRect().intersect(upper_shape->getRect());
-        auto* via = new Via(connect.get(),
-                            lower_shape->getNet(),
-                            via_rect,
-                            lower_shape,
-                            upper_shape);
+        auto* via = new Via(
+            connect, lower_shape->getNet(), via_rect, lower_shape, upper_shape);
         shape_intersections.push_back(ViaPtr(via));
       }
     }
@@ -1107,14 +1115,14 @@ bool Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
                     const std::vector<Connect*>& extra_connects,
                     bool repair_rings)
 {
-  makeVias(global_shapes, obstructions, repair_rings);
+  makeVias(global_shapes, obstructions, extra_connects, repair_rings);
 
   // repair vias that are only partially overlapping straps
   const bool repaired = repairVias(
       global_shapes, local_obstructions, extra_connects, repair_rings);
   if (repaired) {
     // rebuild vias since shapes changed
-    makeVias(global_shapes, obstructions, repair_rings);
+    makeVias(global_shapes, obstructions, extra_connects, repair_rings);
   }
 
   return repaired;
@@ -1122,6 +1130,7 @@ bool Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
 
 void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
                     const Shape::ObstructionTreeMap& obstructions,
+                    const std::vector<Connect*>& extra_connects,
                     bool repair_rings)
 {
   debugPrint(
@@ -1155,7 +1164,7 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
 
   // get possible vias
   std::vector<ViaPtr> vias;
-  getIntersections(vias, search_shapes, repair_rings);
+  getIntersections(vias, search_shapes, extra_connects, repair_rings);
 
   auto remove_set_of_vias = [&vias](std::set<ViaPtr>& remove_vias) {
     std::erase_if(vias,
@@ -1180,8 +1189,12 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
       const auto& search_obs = search_obstructions[layer];
       if (search_obs.qbegin(
               bgi::intersects(via->getArea())
-              && bgi::satisfies([this, ignore_same_net_obs, layer, via_net](
-                                    const ShapePtr& other) -> bool {
+              && bgi::satisfies([this,
+                                 ignore_same_net_obs,
+                                 layer,
+                                 via_net,
+                                 lower_component,
+                                 upper_component](const ShapePtr& other) {
                    if (ignore_same_net_obs && other->getNet() == via_net) {
                      auto* component = other->getGridComponent();
                      if (component == nullptr
@@ -1199,7 +1212,14 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
                    }
                    const GridObsShape* shape
                        = static_cast<GridObsShape*>(other.get());
-                   return !shape->belongsTo(this);
+                   const Grid* obs_grid = shape->getGrid();
+                   return !shape->belongsTo(this)
+                          && (obs_grid->type() != Grid::kInstance
+                              || ((lower_component == nullptr
+                                   || lower_component->getGrid() != obs_grid)
+                                  && (upper_component == nullptr
+                                      || upper_component->getGrid()
+                                             != obs_grid)));
                  }))
           != search_obs.qend()) {
         remove_vias.insert(via);
@@ -1744,23 +1764,35 @@ InstanceGrid::InstanceGrid(
     VoltageDomain* domain,
     const std::string& name,
     bool start_with_power,
-    odb::dbInst* inst,
+    const std::vector<odb::dbInst*>& insts,
     const std::vector<odb::dbTechLayer*>& generate_obstructions)
-    : Grid(domain, name, start_with_power, generate_obstructions), inst_(inst)
+    : Grid(domain, name, start_with_power, generate_obstructions), insts_(insts)
 {
-  auto* halo = inst->getHalo();
-  if (halo != nullptr && !halo->isSoft()) {
-    odb::Rect halo_box = inst->getTransformedHalo();
+  for (auto* inst : insts_) {
+    auto* halo = inst->getHalo();
+    if (halo != nullptr && !halo->isSoft()) {
+      odb::Rect halo_box = inst->getTransformedHalo();
 
-    // copy halo from db
-    addHalo(
-        {halo_box.xMin(), halo_box.yMin(), halo_box.xMax(), halo_box.yMax()});
+      // copy halo from db
+      addHalo({std::max(halos_[0], halo_box.xMin()),
+               std::max(halos_[1], halo_box.yMin()),
+               std::max(halos_[2], halo_box.xMax()),
+               std::max(halos_[3], halo_box.yMax())});
+    }
   }
 }
 
 std::string InstanceGrid::getLongName() const
 {
-  return getName() + " - " + inst_->getName();
+  if (insts_.size() == 1) {
+    return getName() + " - " + getInstance()->getName();
+  }
+  return getName();
+}
+
+odb::PtrSet<odb::dbInst> InstanceGrid::getInstances() const
+{
+  return odb::PtrSet<odb::dbInst>(insts_.begin(), insts_.end());
 }
 
 void InstanceGrid::addHalo(const std::array<int, 4>& halos)
@@ -1775,8 +1807,11 @@ void InstanceGrid::setGridToBoundary(bool value)
 
 odb::Rect InstanceGrid::getDomainArea() const
 {
-  auto* bbox = inst_->getBBox();
-  odb::Rect inst_box = bbox->getBox();
+  odb::Rect inst_box;
+  inst_box.mergeInit();
+  for (auto* inst : insts_) {
+    inst_box.merge(inst->getBBox()->getBox());
+  }
 
   return inst_box;
 }
@@ -1792,17 +1827,22 @@ odb::Rect InstanceGrid::getDomainBoundary() const
   odb::Rect pin_box;
   pin_box.mergeInit();
 
-  const odb::dbTransform transform = inst_->getTransform();
+  for (auto* inst : insts_) {
+    odb::Rect inst_pin_box;
+    inst_pin_box.mergeInit();
 
-  for (auto* pin : inst_->getMaster()->getMTerms()) {
-    if (!pin->getSigType().isSupply()) {
-      continue;
+    for (auto* pin : inst->getMaster()->getMTerms()) {
+      if (!pin->getSigType().isSupply()) {
+        continue;
+      }
+
+      inst_pin_box.merge(pin->getBBox());
     }
 
-    pin_box.merge(pin->getBBox());
+    const odb::dbTransform transform = inst->getTransform();
+    transform.apply(inst_pin_box);
+    pin_box.merge(inst_pin_box);
   }
-
-  transform.apply(pin_box);
 
   return pin_box;
 }
@@ -1904,11 +1944,13 @@ void InstanceGrid::getGridLevelObstructions(ShapeVectorMap& obstructions) const
     local_obs[layer].push_back(obs);
   }
 
-  // copy instance obstructions
-  for (const auto& [layer, shapes] : getInstanceObstructions(inst_, halos_)) {
-    for (const auto& shape : shapes) {
-      auto obs = std::make_shared<GridObsShape>(layer, shape->getRect(), this);
-      local_obs[layer].push_back(obs);
+  for (auto* inst : insts_) {
+    for (const auto& [layer, shapes] : getInstanceObstructions(inst, halos_)) {
+      for (const auto& shape : shapes) {
+        auto obs
+            = std::make_shared<GridObsShape>(layer, shape->getRect(), this);
+        local_obs[layer].push_back(obs);
+      }
     }
   }
 
@@ -1966,22 +2008,25 @@ ShapeVectorMap InstanceGrid::getInstancePins(odb::dbInst* inst)
 
 void InstanceGrid::getIntersections(std::vector<ViaPtr>& vias,
                                     const Shape::ShapeTreeMap& shapes,
+                                    const std::vector<Connect*>& extra_connects,
                                     bool repair_rings) const
 {
   // add instance pins
   Shape::ShapeTreeMap inst_shapes = shapes;
   for (auto* net : getNets(false)) {
-    for (const auto& [layer, shapes_on_layer] : getInstancePins(inst_)) {
-      auto& layer_shapes = inst_shapes[layer];
-      for (const auto& shape : shapes_on_layer) {
-        if (shape->getNet() == net) {
-          layer_shapes.insert(shape);
+    for (auto* inst : insts_) {
+      for (const auto& [layer, shapes_on_layer] : getInstancePins(inst)) {
+        auto& layer_shapes = inst_shapes[layer];
+        for (const auto& shape : shapes_on_layer) {
+          if (shape->getNet() == net) {
+            layer_shapes.insert(shape);
+          }
         }
       }
     }
   }
 
-  Grid::getIntersections(vias, inst_shapes, repair_rings);
+  Grid::getIntersections(vias, inst_shapes, extra_connects, repair_rings);
 }
 
 std::vector<odb::dbNet*> InstanceGrid::getNets(bool starts_with_power) const
@@ -1989,10 +2034,12 @@ std::vector<odb::dbNet*> InstanceGrid::getNets(bool starts_with_power) const
   auto nets = Grid::getNets(starts_with_power);
 
   odb::PtrSet<odb::dbNet> connected_nets;
-  for (auto* iterm : inst_->getITerms()) {
-    auto* net = iterm->getNet();
-    if (net != nullptr) {
-      connected_nets.insert(net);
+  for (auto* inst : insts_) {
+    for (auto* iterm : inst->getITerms()) {
+      auto* net = iterm->getNet();
+      if (net != nullptr) {
+        connected_nets.insert(net);
+      }
     }
   }
 
@@ -2019,12 +2066,14 @@ void InstanceGrid::report() const
 bool InstanceGrid::isValid() const
 {
   if (getNets(startsWithPower()).empty()) {
-    if (!inst_->getITerms().empty()) {
-      // only warn when instance has something that could be connected to
-      getLogger()->warn(utl::PDN,
-                        231,
-                        "{} is not connected to any power/ground nets.",
-                        inst_->getName());
+    for (auto* inst : insts_) {
+      if (!inst->getITerms().empty()) {
+        // only warn when instance has something that could be connected to
+        getLogger()->warn(utl::PDN,
+                          231,
+                          "{} is not connected to any power/ground nets.",
+                          inst->getName());
+      }
     }
     return false;
   }
@@ -2042,9 +2091,9 @@ bool InstanceGrid::hasHalo() const
 }
 
 InstanceGrid::Halo InstanceGrid::suggestHalo(
+    const odb::Rect& inst_box,
     const std::vector<odb::Rect>& rows) const
 {
-  const odb::Rect inst_box = inst_->getBBox()->getBox();
   const odb::Rect inst_halo = applyHalo(inst_box, halos_, true, true, true);
 
   // Whether a row shares the instance's horizontal/vertical extent.  A row
@@ -2108,48 +2157,54 @@ InstanceGrid::Halo InstanceGrid::suggestHalo(
 
 void InstanceGrid::checkHalo() const
 {
-  if (!hasHalo() || inst_->getMaster()->isCover()) {
+  if (!hasHalo()) {
     return;
   }
 
-  const odb::Rect inst_box = inst_->getBBox()->getBox();
-  const odb::Rect halo_box = applyHalo(inst_box, true, true, true);
-
-  // Collect rows the halo intrudes into.  Rows the instance footprint itself
-  // overlaps are skipped: no halo adjustment can clear those (the instance is
-  // placed on top of them), so they are out of scope here.
-  std::vector<odb::Rect> overlapping_rows;
-  std::string first_row;
-  for (auto* row : getBlock()->getRows()) {
-    const odb::Rect row_box = row->getBBox();
-    if (!halo_box.overlaps(row_box) || inst_box.overlaps(row_box)) {
+  for (auto* inst : insts_) {
+    if (inst->getMaster()->isCover()) {
       continue;
     }
-    if (overlapping_rows.empty()) {
-      first_row = row->getName();
+
+    const odb::Rect inst_box = inst->getBBox()->getBox();
+    const odb::Rect halo_box = applyHalo(inst_box, true, true, true);
+
+    // Collect rows the halo intrudes into.  Rows the instance footprint itself
+    // overlaps are skipped: no halo adjustment can clear those (the instance
+    // is placed on top of them), so they are out of scope here.
+    std::vector<odb::Rect> overlapping_rows;
+    std::string first_row;
+    for (auto* row : getBlock()->getRows()) {
+      const odb::Rect row_box = row->getBBox();
+      if (!halo_box.overlaps(row_box) || inst_box.overlaps(row_box)) {
+        continue;
+      }
+      if (overlapping_rows.empty()) {
+        first_row = row->getName();
+      }
+      overlapping_rows.push_back(row_box);
     }
-    overlapping_rows.push_back(row_box);
+
+    if (overlapping_rows.empty()) {
+      continue;
+    }
+
+    const Halo suggested = suggestHalo(inst_box, overlapping_rows);
+
+    const double dbus = getBlock()->getDbUnitsPerMicron();
+    getLogger()->error(
+        utl::PDN,
+        8,
+        "{} halo overlaps row {} (and {} other row(s)); reduce the halo to at "
+        "most \"{:.4f} {:.4f} {:.4f} {:.4f}\".",
+        getLongName(),
+        first_row,
+        overlapping_rows.size() - 1,
+        suggested[0] / dbus,
+        suggested[1] / dbus,
+        suggested[2] / dbus,
+        suggested[3] / dbus);
   }
-
-  if (overlapping_rows.empty()) {
-    return;
-  }
-
-  const Halo suggested = suggestHalo(overlapping_rows);
-
-  const double dbus = getBlock()->getDbUnitsPerMicron();
-  getLogger()->error(
-      utl::PDN,
-      8,
-      "{} halo overlaps row {} (and {} other row(s)); reduce the halo to at "
-      "most \"{:.4f} {:.4f} {:.4f} {:.4f}\".",
-      getLongName(),
-      first_row,
-      overlapping_rows.size() - 1,
-      suggested[0] / dbus,
-      suggested[1] / dbus,
-      suggested[2] / dbus,
-      suggested[3] / dbus);
 }
 
 void InstanceGrid::checkSetup() const
@@ -2160,99 +2215,101 @@ void InstanceGrid::checkSetup() const
 
   // check blockages above pins
   const auto nets = getNets(startsWithPower());
-  for (auto* iterm : inst_->getITerms()) {
-    if (std::ranges::find(nets, iterm->getNet()) == nets.end()) {
-      continue;
-    }
-    odb::dbTechLayer* top = nullptr;
-    std::set<odb::Rect> boxes;
-    for (auto* mpin : iterm->getMTerm()->getMPins()) {
-      for (auto* box : mpin->getGeometry()) {
-        auto* layer = box->getTechLayer();
-        if (layer == nullptr) {
-          continue;
-        }
-        if (top == nullptr
-            || top->getRoutingLevel() < layer->getRoutingLevel()) {
-          top = layer;
-          boxes.clear();
-        }
-        if (layer == top) {
-          boxes.insert(box->getBox());
+  for (auto* inst : insts_) {
+    for (auto* iterm : inst->getITerms()) {
+      if (std::ranges::find(nets, iterm->getNet()) == nets.end()) {
+        continue;
+      }
+      odb::dbTechLayer* top = nullptr;
+      std::set<odb::Rect> boxes;
+      for (auto* mpin : iterm->getMTerm()->getMPins()) {
+        for (auto* box : mpin->getGeometry()) {
+          auto* layer = box->getTechLayer();
+          if (layer == nullptr) {
+            continue;
+          }
+          if (top == nullptr
+              || top->getRoutingLevel() < layer->getRoutingLevel()) {
+            top = layer;
+            boxes.clear();
+          }
+          if (layer == top) {
+            boxes.insert(box->getBox());
+          }
         }
       }
-    }
 
-    if (top != nullptr) {
-      const int top_idx = top->getNumber();
-      std::map<odb::Rect, int64_t> overlap_area;
-      odb::PtrSet<odb::dbTechLayer> layers;
-      for (auto* master_obs : inst_->getMaster()->getObstructions()) {
-        auto* obs_layer = master_obs->getTechLayer();
-        if (obs_layer == nullptr) {
-          continue;
-        }
-        if (obs_layer->getType() != odb::dbTechLayerType::ROUTING) {
-          continue;
-        }
-        if (obs_layer->getNumber() > top_idx) {
-          for (const auto& pin : boxes) {
-            const odb::Rect mobs = master_obs->getBox();
+      if (top != nullptr) {
+        const int top_idx = top->getNumber();
+        std::map<odb::Rect, int64_t> overlap_area;
+        odb::PtrSet<odb::dbTechLayer> layers;
+        for (auto* master_obs : inst->getMaster()->getObstructions()) {
+          auto* obs_layer = master_obs->getTechLayer();
+          if (obs_layer == nullptr) {
+            continue;
+          }
+          if (obs_layer->getType() != odb::dbTechLayerType::ROUTING) {
+            continue;
+          }
+          if (obs_layer->getNumber() > top_idx) {
+            for (const auto& pin : boxes) {
+              const odb::Rect mobs = master_obs->getBox();
 
-            if (mobs.intersects(pin)) {
-              // Determine level of obstruction
-              const odb::Rect overlap = mobs.intersect(pin);
-              overlap_area[pin] += overlap.area();
-              layers.insert(obs_layer);
+              if (mobs.intersects(pin)) {
+                // Determine level of obstruction
+                const odb::Rect overlap = mobs.intersect(pin);
+                overlap_area[pin] += overlap.area();
+                layers.insert(obs_layer);
+              }
             }
           }
         }
-      }
 
-      if (!overlap_area.empty()) {
-        int64_t total_pin_area = 0;
-        int64_t total_overlap = 0;
-        std::string layer_txt;
-        for (const auto* layer : layers) {
-          if (!layer_txt.empty()) {
-            layer_txt += ", ";
+        if (!overlap_area.empty()) {
+          int64_t total_pin_area = 0;
+          int64_t total_overlap = 0;
+          std::string layer_txt;
+          for (const auto* layer : layers) {
+            if (!layer_txt.empty()) {
+              layer_txt += ", ";
+            }
+            layer_txt += layer->getName();
           }
-          layer_txt += layer->getName();
-        }
-        for (const auto& [pin, overlap] : overlap_area) {
-          const int64_t pinarea = pin.area();
-          total_overlap += overlap;
-          total_pin_area += pinarea;
+          for (const auto& [pin, overlap] : overlap_area) {
+            const int64_t pinarea = pin.area();
+            total_overlap += overlap;
+            total_pin_area += pinarea;
 
-          if (overlap >= pinarea) {
-            // pin completely obstructed
-            getLogger()->error(
-                utl::PDN,
-                6,
-                "{} on {} is blocked by obstructions on {} for {}",
-                iterm->getMTerm()->getName(),
-                top->getName(),
-                layer_txt,
-                inst_->getName());
+            if (overlap >= pinarea) {
+              // pin completely obstructed
+              getLogger()->error(
+                  utl::PDN,
+                  6,
+                  "{} on {} is blocked by obstructions on {} for {}",
+                  iterm->getMTerm()->getName(),
+                  top->getName(),
+                  layer_txt,
+                  inst->getName());
+            }
           }
-        }
 
-        if (total_pin_area == 0) {
-          // should not occur, implies all blocked pins have 0 area
-          continue;
-        }
+          if (total_pin_area == 0) {
+            // should not occur, implies all blocked pins have 0 area
+            continue;
+          }
 
-        const float pct
-            = 100 * static_cast<float>(total_overlap) / total_pin_area;
-        getLogger()->warn(utl::PDN,
-                          7,
-                          "{} on {} is partially blocked ({:.1f}%) by "
-                          "obstructions on {} for {}",
-                          iterm->getMTerm()->getName(),
-                          top->getName(),
-                          pct,
-                          layer_txt,
-                          inst_->getName());
+          const float pct
+              = 100 * static_cast<float>(total_overlap) / total_pin_area;
+          getLogger()->warn(utl::PDN,
+                            7,
+                            "{} on {} is partially blocked ({:.1f}%) by "
+                            "obstructions on {} for {}",
+                            iterm->getMTerm()->getName(),
+                            top->getName(),
+                            pct,
+                            layer_txt,
+                            inst->getName());
+        }
       }
     }
   }
@@ -2276,7 +2333,7 @@ std::string DummyInstanceGrid::getLongName() const
 BumpGrid::BumpGrid(VoltageDomain* domain,
                    const std::string& name,
                    odb::dbInst* inst)
-    : InstanceGrid(domain, name, true, inst, {})
+    : InstanceGrid(domain, name, true, {inst}, {})
 {
 }
 
