@@ -75,6 +75,7 @@ class Connect
   bool containsIntermediateLayer(odb::dbTechLayer* layer) const;
   bool overlaps(const Connect* other) const;
   bool startsBelow(const Connect* other) const;
+  int getMinWidth(odb::dbTechLayer* layer) const;
 
   bool appliesToVia(const ViaPtr& via) const;
 
@@ -165,7 +166,6 @@ class Connect
       const odb::Rect& upper) const;
   void generateMinEnclosureViaRects(std::vector<ViaLayerRects>& rects) const;
 
-  int getMinWidth(odb::dbTechLayer* layer) const;
   int getMaxEnclosureFromCutLayer(odb::dbTechLayer* layer, int min_width) const;
 };
 

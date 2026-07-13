@@ -396,15 +396,35 @@ bool Grid::repairVias(const Shape::ShapeTreeMap& global_shapes,
       continue;
     }
 
+    const bool pad_hop
+        = lower_shape->getGridComponent() == upper_shape->getGridComponent()
+          && lower_shape->getGridComponent()->type()
+                 == GridComponent::kPadConnect
+          && static_cast<PadDirectConnectionStraps*>(
+                 lower_shape->getGridComponent())
+                     ->getPadHopPairedShape(lower_shape.get())
+                 == upper_shape.get();
+    odb::Rect repair_area = via->getArea();
+    if (pad_hop) {
+      const int width
+          = std::max(via->getConnect()->getMinWidth(lower_shape->getLayer()),
+                     via->getConnect()->getMinWidth(upper_shape->getLayer()));
+      const int size
+          = lower_shape->isHorizontal() ? repair_area.dx() : repair_area.dy();
+      repair_area = repair_area.bloat(std::max(0, (width - size + 1) / 2),
+                                      lower_shape->isHorizontal()
+                                          ? odb::Orientation2D::Horizontal
+                                          : odb::Orientation2D::Vertical);
+    }
     if (lower_belongs_to_grid && lower_shape->isModifiable()) {
       extend_shape(lower_shape,
-                   upper_shape->getRect(),
+                   pad_hop ? repair_area : upper_shape->getRect(),
                    search_shapes[lower_shape->getLayer()],
                    obs_filter);
     }
     if (upper_belongs_to_grid && upper_shape->isModifiable()) {
       extend_shape(upper_shape,
-                   lower_shape->getRect(),
+                   pad_hop ? repair_area : lower_shape->getRect(),
                    search_shapes[upper_shape->getLayer()],
                    obs_filter);
     }
@@ -924,6 +944,17 @@ void Grid::getIntersections(std::vector<ViaPtr>& shape_intersections,
         const auto& upper_shape = *it;
         auto* lower_grid_component = lower_shape->getGridComponent();
         auto* upper_grid_component = upper_shape->getGridComponent();
+        const bool both_pad_connects
+            = lower_grid_component != nullptr && upper_grid_component != nullptr
+              && lower_grid_component->type() == GridComponent::kPadConnect
+              && upper_grid_component->type() == GridComponent::kPadConnect;
+        if (both_pad_connects
+            && (lower_grid_component != upper_grid_component
+                || static_cast<PadDirectConnectionStraps*>(lower_grid_component)
+                           ->getPadHopPairedShape(lower_shape.get())
+                       != upper_shape.get())) {
+          continue;
+        }
         Grid* lower_grid = lower_grid_component == nullptr
                                ? nullptr
                                : lower_grid_component->getGrid();
@@ -1390,6 +1421,18 @@ void Grid::removeInvalidVias()
   }
 }
 
+bool Grid::removeFailedPadHops() const
+{
+  bool removed = false;
+  for (const auto& strap : straps_) {
+    if (strap->type() == GridComponent::kPadConnect) {
+      removed |= static_cast<PadDirectConnectionStraps*>(strap.get())
+                     ->removeFailedPadHops();
+    }
+  }
+  return removed;
+}
+
 std::vector<GridComponent*> Grid::getGridComponents() const
 {
   std::vector<GridComponent*> components;
@@ -1449,12 +1492,23 @@ std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
     return std::tie(l_low_level, l_high_level, l_area)
            < std::tie(r_low_level, r_high_level, r_area);
   });
+  std::map<Via*, odb::PtrSet<odb::dbSBox>> via_shapes;
   for (const auto& via : vias) {
     auto net = net_map.find(via->getNet());
     if (net == net_map.end()) {
       continue;
     }
-    via->writeToDb(net->second, getBlock(), obstructions);
+    via_shapes[via.get()]
+        = via->writeToDb(net->second, getBlock(), obstructions);
+  }
+  if (removeFailedPadHops()) {
+    for (const auto& [via, shapes] : via_shapes) {
+      if (!via->isValid()) {
+        for (auto* shape : shapes) {
+          odb::dbSBox::destroy(shape);
+        }
+      }
+    }
   }
   for (const auto& connect : connect_) {
     connect->printViaReport();

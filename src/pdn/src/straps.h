@@ -136,6 +136,10 @@ class PadDirectConnectionStraps : public Straps
   void makeShapes(const Shape::ShapeTreeMap& other_shapes) override;
   bool refineShapes(Shape::ShapeTreeMap& all_shapes,
                     Shape::ObstructionTreeMap& all_obstructions) override;
+  void removeShape(Shape* shape) override;
+  void replaceShape(Shape* shape, std::unique_ptr<Shape> replacement) override;
+  void replaceShape(Shape* shape,
+                    std::vector<std::unique_ptr<Shape>>& replacements) override;
 
   void report() const override;
   Type type() const override { return GridComponent::kPadConnect; }
@@ -149,6 +153,8 @@ class PadDirectConnectionStraps : public Straps
 
   // cut shapes and remove if connection to ring is not possible
   void cutShapes(const Shape::ObstructionTreeMap& obstructions) override;
+  Shape* getPadHopPairedShape(Shape* shape) const;
+  bool removeFailedPadHops();
 
   static void unifyConnectionTypes(
       const std::vector<PadDirectConnectionStraps*>& straps);
@@ -165,6 +171,7 @@ class PadDirectConnectionStraps : public Straps
   std::optional<odb::dbWireShapeType> target_shapes_type_;
   std::map<Shape*, Shape*> target_shapes_;
   std::map<Shape*, odb::Rect> target_pin_shape_;
+  std::map<Shape*, Shape*> pad_hop_escape_shapes_;
   odb::dbDirection pad_edge_;
   ConnectionType type_ = ConnectionType::kNone;
   std::vector<odb::dbTechLayer*> layers_;
@@ -185,6 +192,10 @@ class PadDirectConnectionStraps : public Straps
 
   void makeShapesFacingCore(const Shape::ShapeTreeMap& other_shapes);
   void makeShapesOverPads(const Shape::ShapeTreeMap& other_shapes);
+  odb::Rect makePadRoutePin(odb::dbTechLayer* source_layer,
+                            odb::dbTechLayer* route_layer,
+                            const odb::Rect& pin_rect,
+                            const odb::Rect& inst_rect) const;
 
   std::vector<PadDirectConnectionStraps*> getAssociatedStraps() const;
   const std::vector<odb::dbBox*>& getPins() const { return pins_; }
@@ -209,6 +220,9 @@ class PadDirectConnectionStraps : public Straps
                    const Shape::ShapeTreeMap& all_shapes,
                    const Shape::ObstructionTreeMap& all_obstructions);
   bool isTargetShape(const Shape* shape) const;
+  Shape* getPadHopRouteShape(Shape* shape) const;
+  void erasePadConnectionMetadata(Shape* shape);
+  ShapePtr replacePadHopShape(Shape* shape, std::unique_ptr<Shape> replacement);
 };
 
 class RepairChannelStraps : public Straps

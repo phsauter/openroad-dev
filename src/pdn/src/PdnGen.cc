@@ -280,6 +280,11 @@ void PdnGen::buildGrids(bool trim)
   }
 
   updateVias();
+  if (std::ranges::count_if(
+          grids, [](Grid* grid) { return grid->removeFailedPadHops(); })
+      != 0) {
+    cleanupVias();
+  }
 
   if (trim) {
     trimShapes();
