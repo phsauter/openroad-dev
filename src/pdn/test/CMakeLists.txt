@@ -49,6 +49,7 @@ or_integration_tests(
     core_grid_start_power_strap_ground
     core_grid_strap_count
     core_grid_strap_outside_core
+    core_grid_trim_rail_stub
     core_grid_via_snap
     core_grid_with_multiple_bterms
     core_grid_with_no_grid
@@ -90,6 +91,7 @@ or_integration_tests(
     macros_cells_orient
     macros_cells_overlapping_ports
     macros_cells_via_failure
+    macros_connect_to_grid
     macros_different_nets
     macros_grid_check
     macros_grid_not_used
@@ -119,6 +121,8 @@ or_integration_tests(
     pads_black_parrot_offset
     pads_black_parrot_straps
     pads_connect_from_non_pref_edge
+    pads_connect_no_macro_repair
+    pads_connect_over_pads_trim
     power_switch
     power_switch_cut_rows
     power_switch_daisy
@@ -142,4 +146,3 @@ or_integration_tests(
     sroute_test
     widthtable
 )
-
