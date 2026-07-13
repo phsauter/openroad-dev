@@ -341,7 +341,21 @@ void Straps::makeStraps(int x_start,
       group_pos += group_pitch;
       next_minimum_track = group_pos;
 
-      if (avoid.qbegin(bgi::intersects(strap_rect)) != avoid.qend()) {
+      bool blocked = false;
+      for (auto it = avoid.qbegin(bgi::intersects(strap_rect));
+           it != avoid.qend();
+           it++) {
+        const auto& shape = *it;
+        auto* component = shape->getGridComponent();
+        const bool same_domain
+            = component == nullptr || component->getDomain() == getDomain();
+        if (shape->getNet() == net && same_domain) {
+          continue;
+        }
+        blocked = true;
+        break;
+      }
+      if (blocked) {
         // dont add this strap as it intersects an avoidance
         continue;
       }
