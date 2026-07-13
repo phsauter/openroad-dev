@@ -1,5 +1,6 @@
 # Check for repair channels with straps in same direction and reject
 # this avoids the infinate loop reported in: https://github.com/The-OpenROAD-Project/OpenROAD/issues/5905
+source "helpers.tcl"
 
 read_lef repair_channel_inf_loop/tech_macro.lef
 read_def repair_channel_inf_loop/floorplan.def
@@ -18,3 +19,15 @@ add_pdn_connect -layers {M1 M3}
 
 catch { pdngen } err
 puts $err
+
+set block [ord::get_db_block]
+set pdn_category [$block findMarkerCategory "PDN"]
+set repair_category [$pdn_category findMarkerCategory "Repair channels"]
+
+check "repair channel markers" {
+  llength [$repair_category getMarkers]
+} 2
+check "partial VDD grid" { expr { [llength [[$block findNet VDD] getSWires]] > 0 } } 1
+check "partial GND grid" { expr { [llength [[$block findNet GND] getSWires]] > 0 } } 1
+
+exit_summary
