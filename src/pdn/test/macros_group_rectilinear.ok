@@ -1,11 +1,11 @@
 [INFO ODB-0227] LEF file: Nangate45/Nangate45.lef, created 22 layers, 27 vias, 135 library cells
-[INFO ODB-0227] LEF file: nangate_macros/fakeram45_64x32.lef, created 1 library cells
+[INFO ODB-0227] LEF file: Nangate45/fakeram45_64x32.lef, created 1 library cells
 [INFO ODB-0128] Design: RocketTile
 [INFO ODB-0130]     Created 269 pins.
 [INFO ODB-0131]     Created 547 components and 1304 component-terminals.
 [INFO ODB-0132]     Created 2 special nets and 1094 connections.
 [INFO ODB-0133]     Created 269 nets and 0 connections.
-[INFO PDN-0001] Inserting grid: Core
+[INFO ODB-0303] The initial 209 rows (80249 sites) were cut with 5 shapes for a total of 202 rows (41021 sites).
 [INFO PDN-0001] Inserting grid: srams
-Summary 2 / 2 (100% pass)
+Summary 4 / 4 (100% pass)
 pass
