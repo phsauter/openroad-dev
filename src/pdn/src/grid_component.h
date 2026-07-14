@@ -64,6 +64,7 @@ class GridComponent
   virtual void replaceShape(Shape* shape, std::unique_ptr<Shape> replacement);
   virtual void replaceShape(Shape* shape,
                             std::vector<std::unique_ptr<Shape>>& replacements);
+  void addUnmergedShape(const ShapePtr& shape);
   void clearShapes() { shapes_.clear(); }
   int getShapeCount() const;
 

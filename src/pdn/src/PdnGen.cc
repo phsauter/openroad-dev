@@ -52,6 +52,86 @@ void addGridShapes(Shape::ShapeTreeMap& shapes, Grid* grid)
   grid->getSwitchedPowerShapes(shapes);
 }
 
+void repairShapeSpacing(const std::vector<Grid*>& grids,
+                        const Shape::ShapeTreeMap& existing_shapes,
+                        const Shape::ObstructionTreeMap& obstructions)
+{
+  Shape::ShapeTreeMap all_shapes = existing_shapes;
+  for (auto* grid : grids) {
+    addGridShapes(all_shapes, grid);
+  }
+
+  for (const auto& [layer, shapes] : all_shapes) {
+    for (const auto& shape : shapes) {
+      auto* component = shape->getGridComponent();
+      for (auto it = shapes.qbegin(bgi::intersects(shape->getObstruction()));
+           it != shapes.qend();
+           it++) {
+        const auto& other = *it;
+        auto* other_component = other->getGridComponent();
+        if (other == shape || shape->getNet() != other->getNet()
+            || !shape->getObstruction().overlaps(other->getRect())
+            || (component == nullptr && other_component == nullptr)
+            || (component != nullptr && other_component != nullptr
+                && component->getDomain() != other_component->getDomain())) {
+          continue;
+        }
+
+        const odb::Rect& rect = shape->getRect();
+        const odb::Rect& other_rect = other->getRect();
+        const bool x_gap = rect.xMax() < other_rect.xMin()
+                           || other_rect.xMax() < rect.xMin();
+        const bool y_gap = rect.yMax() < other_rect.yMin()
+                           || other_rect.yMax() < rect.yMin();
+        if (x_gap == y_gap) {
+          continue;
+        }
+
+        const bool shape_first = x_gap ? rect.xMax() < other_rect.xMin()
+                                       : rect.yMax() < other_rect.yMin();
+        const auto spacing = [x_gap](const ShapePtr& candidate, bool first) {
+          const auto& rect = candidate->getRect();
+          const auto& obs = candidate->getObstruction();
+          return x_gap ? (first ? obs.xMax() - rect.xMax()
+                                : rect.xMin() - obs.xMin())
+                       : (first ? obs.yMax() - rect.yMax()
+                                : rect.yMin() - obs.yMin());
+        };
+        const int shape_spacing = spacing(shape, shape_first);
+        const int other_spacing = spacing(other, !shape_first);
+        if (shape_spacing < other_spacing
+            || (shape_spacing == other_spacing && other_rect < rect)) {
+          continue;
+        }
+
+        odb::Rect bridge = rect.intersect(other_rect);
+        if (x_gap) {
+          bridge = odb::Rect(
+              bridge.xMax(), bridge.yMin(), bridge.xMin(), bridge.yMax());
+        } else {
+          bridge = odb::Rect(
+              bridge.xMin(), bridge.yMax(), bridge.xMax(), bridge.yMin());
+        }
+        const auto& layer_obs = obstructions.at(layer);
+        if (layer_obs.qbegin(
+                bgi::intersects(bridge)
+                && bgi::satisfies([&](const ShapePtr& obstruction) {
+                     return obstruction->getNet() != shape->getNet()
+                            && obstruction->getObstruction().overlaps(bridge);
+                   }))
+            != layer_obs.qend()) {
+          continue;
+        }
+        auto repair = std::make_shared<Shape>(
+            layer, shape->getNet(), bridge, shape->getType());
+        repair->setLocked();
+        (component != nullptr ? component : other_component)
+            ->addUnmergedShape(repair);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 PdnGen::PdnGen(odb::dbDatabase* db, Logger* logger) : db_(db), logger_(logger)
@@ -132,6 +212,7 @@ void PdnGen::buildGrids(bool trim)
     all_shapes[layer] = Shape::ShapeTree(shapes.begin(), shapes.end());
   }
   all_shapes_vec.clear();
+  const Shape::ShapeTreeMap existing_shapes = all_shapes;
 
   std::exception_ptr build_error;
   for (auto* grid : grids) {
@@ -291,6 +372,8 @@ void PdnGen::buildGrids(bool trim)
 
     cleanupVias();
   }
+
+  repairShapeSpacing(grids, existing_shapes, block_obs);
 
   bool failed = false;
   for (auto* grid : grids) {

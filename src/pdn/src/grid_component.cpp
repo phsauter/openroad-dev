@@ -80,6 +80,13 @@ bool GridComponent::make(Shape::ShapeTreeMap& shapes,
   return shape_count != getShapeCount();
 }
 
+void GridComponent::addUnmergedShape(const ShapePtr& shape)
+{
+  shape->setGridComponent(this);
+  shape->generateObstruction();
+  shapes_[shape->getLayer()].insert(shape);
+}
+
 ShapePtr GridComponent::addShape(std::unique_ptr<Shape> shape)
 {
   debugPrint(getLogger(),
