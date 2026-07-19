@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -26,6 +27,7 @@
 #include "odb/PtrSetMap.h"
 #include "odb/db.h"
 #include "odb/dbObject.h"
+#include "odb/dbShape.h"
 #include "odb/dbTransform.h"
 #include "odb/dbTypes.h"
 #include "power_cells.h"
@@ -59,6 +61,214 @@ void addGridShapes(Shape::ShapeTreeMap& shapes, Grid* grid)
     shapes[layer].insert(grid_shapes.begin(), grid_shapes.end());
   }
   grid->getSwitchedPowerShapes(shapes);
+}
+
+struct ViaTransition
+{
+  Via* via;
+  odb::dbTechLayer* cut_layer;
+  odb::PtrSet<odb::dbSBox> boxes;
+  odb::PtrMap<odb::dbTechLayer, std::vector<odb::Rect>> metals;
+  std::vector<odb::Rect> cuts;
+};
+
+void repairViaConflicts(const Grid::ViaShapeMap& via_shapes,
+                        const odb::PtrMap<odb::dbNet, odb::dbSWire*>& net_map)
+{
+  std::map<std::pair<Via*, odb::dbTechLayer*>, ViaTransition> transition_map;
+  for (const auto& [via, boxes] : via_shapes) {
+    for (auto* box : boxes) {
+      if (!box->isVia()) {
+        continue;
+      }
+      odb::dbTechLayer* cut_layer = nullptr;
+      std::vector<odb::dbShape> shapes;
+      box->getViaBoxes(shapes);
+      for (const auto& shape : shapes) {
+        if (shape.getTechLayer()->getType() == odb::dbTechLayerType::CUT) {
+          cut_layer = shape.getTechLayer();
+          break;
+        }
+      }
+      if (cut_layer == nullptr) {
+        continue;
+      }
+      auto [it, inserted] = transition_map.try_emplace(
+          std::make_pair(via, cut_layer),
+          ViaTransition{via, cut_layer, {}, {}, {}});
+      ViaTransition& transition = it->second;
+      transition.boxes.insert(box);
+      for (const auto& shape : shapes) {
+        auto* layer = shape.getTechLayer();
+        if (layer->getType() == odb::dbTechLayerType::CUT) {
+          transition.cuts.push_back(shape.getBox());
+        } else if (layer->getType() == odb::dbTechLayerType::ROUTING) {
+          transition.metals[layer].push_back(shape.getBox());
+        }
+      }
+    }
+  }
+
+  std::vector<ViaTransition*> transitions;
+  for (auto& [key, transition] : transition_map) {
+    transitions.push_back(&transition);
+  }
+  auto ring_via = [](const ViaTransition* transition) {
+    return transition->via->getLowerShape()->getType()
+               == odb::dbWireShapeType::RING
+           || transition->via->getUpperShape()->getType()
+                  == odb::dbWireShapeType::RING;
+  };
+  auto better = [&](const ViaTransition* lhs, const ViaTransition* rhs) {
+    const auto score = [&](const ViaTransition* transition) {
+      int64_t area = 0;
+      for (const odb::Rect& cut : transition->cuts) {
+        area += cut.area();
+      }
+      return std::make_tuple(transition->cuts.size(),
+                             area,
+                             ring_via(transition),
+                             transition->via->getArea().area());
+    };
+    const auto lhs_score = score(lhs);
+    const auto rhs_score = score(rhs);
+    return lhs_score != rhs_score ? lhs_score > rhs_score
+                                  : lhs->via->getArea() < rhs->via->getArea();
+  };
+  auto conflicts_with = [](const ViaTransition* lhs, const ViaTransition* rhs) {
+    if (lhs->cut_layer != rhs->cut_layer
+        || lhs->via->getNet() != rhs->via->getNet()) {
+      return false;
+    }
+    const int spacing = lhs->cut_layer->getSpacing();
+    for (const odb::Rect& lhs_cut : lhs->cuts) {
+      odb::Rect obstruction;
+      lhs_cut.bloat(std::max(0, spacing - 1), obstruction);
+      for (const odb::Rect& rhs_cut : rhs->cuts) {
+        if (lhs_cut != rhs_cut && obstruction.intersects(rhs_cut)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  std::map<ViaTransition*, ViaTransition*> replacements;
+  for (size_t i = 0; i < transitions.size(); i++) {
+    for (size_t j = i + 1; j < transitions.size(); j++) {
+      if (conflicts_with(transitions[i], transitions[j])) {
+        ViaTransition* winner = better(transitions[i], transitions[j])
+                                    ? transitions[i]
+                                    : transitions[j];
+        ViaTransition* loser
+            = winner == transitions[i] ? transitions[j] : transitions[i];
+        auto replacement = replacements.find(loser);
+        if (replacement == replacements.end()
+            || better(winner, replacement->second)) {
+          replacements[loser] = winner;
+        }
+      }
+    }
+  }
+
+  auto make_bridge
+      = [](const odb::Rect& lhs, const odb::Rect& rhs, odb::Rect& bridge) {
+          if (lhs.intersects(rhs)) {
+            return true;
+          }
+          const int xlo = std::max(lhs.xMin(), rhs.xMin());
+          const int xhi = std::min(lhs.xMax(), rhs.xMax());
+          const int ylo = std::max(lhs.yMin(), rhs.yMin());
+          const int yhi = std::min(lhs.yMax(), rhs.yMax());
+          if (xlo < xhi) {
+            bridge = odb::Rect(xlo,
+                               std::min(lhs.yMax(), rhs.yMax()),
+                               xhi,
+                               std::max(lhs.yMin(), rhs.yMin()));
+            return true;
+          }
+          if (ylo < yhi) {
+            bridge = odb::Rect(std::min(lhs.xMax(), rhs.xMax()),
+                               ylo,
+                               std::max(lhs.xMin(), rhs.xMin()),
+                               yhi);
+            return true;
+          }
+          return false;
+        };
+  auto resolve = [&](ViaTransition* transition) {
+    while (replacements.contains(transition)) {
+      transition = replacements.at(transition);
+    }
+    return transition;
+  };
+
+  for (const auto& [loser, replacement] : replacements) {
+    ViaTransition* winner = resolve(replacement);
+    if (winner->metals.size() != loser->metals.size()
+        || std::ranges::any_of(winner->metals, [&](const auto& metal) {
+             return !loser->metals.contains(metal.first);
+           })) {
+      continue;
+    }
+    std::vector<std::pair<odb::dbTechLayer*, odb::Rect>> bridges;
+    bool repairable = true;
+    for (const auto& [layer, targets] : winner->metals) {
+      std::vector<odb::Rect> sources;
+      if (loser->via->getLowerLayer() == layer) {
+        sources.push_back(loser->via->getLowerShape()->getRect());
+      }
+      if (loser->via->getUpperLayer() == layer) {
+        sources.push_back(loser->via->getUpperShape()->getRect());
+      }
+      for (ViaTransition* other : transitions) {
+        if (other == loser || other->via != loser->via) {
+          continue;
+        }
+        other = resolve(other);
+        if (other->metals.contains(layer)) {
+          const auto& metals = other->metals.at(layer);
+          sources.insert(sources.end(), metals.begin(), metals.end());
+        }
+      }
+      bool connected = false;
+      odb::Rect best;
+      int64_t best_area = std::numeric_limits<int64_t>::max();
+      for (const odb::Rect& source : sources) {
+        for (const odb::Rect& target : targets) {
+          odb::Rect bridge;
+          if (make_bridge(source, target, bridge)) {
+            connected = true;
+            if (bridge.area() < best_area) {
+              best = bridge;
+              best_area = bridge.area();
+            }
+          }
+        }
+      }
+      if (!connected) {
+        repairable = false;
+        break;
+      }
+      if (best_area != 0) {
+        bridges.emplace_back(layer, best);
+      }
+    }
+    if (!repairable) {
+      continue;
+    }
+    for (const auto& [layer, bridge] : bridges) {
+      odb::dbSBox::create(net_map.at(loser->via->getNet()),
+                          layer,
+                          bridge.xMin(),
+                          bridge.yMin(),
+                          bridge.xMax(),
+                          bridge.yMax(),
+                          odb::dbWireShapeType::DRCFILL);
+    }
+    for (auto* box : loser->boxes) {
+      odb::dbSBox::destroy(box);
+    }
+  }
 }
 
 }  // namespace
@@ -381,16 +591,8 @@ void PdnGen::trimShapes()
     addGridShapes(all_shapes, grid);
   }
 
-  auto same_domain = [](const ShapePtr& shape, const ShapePtr& other) {
-    auto* component = shape->getGridComponent();
-    auto* other_component = other->getGridComponent();
-    return component == nullptr || other_component == nullptr
-           || component->getDomain() == other_component->getDomain();
-  };
-
-  auto add_same_layer_connections = [&all_shapes, &same_domain](
-                                        const ShapePtr& shape,
-                                        odb::Rect& rect) {
+  auto add_same_layer_connections = [&all_shapes](const ShapePtr& shape,
+                                                  odb::Rect& rect) {
     auto layer_shapes = all_shapes.find(shape->getLayer());
     if (layer_shapes == all_shapes.end()) {
       return;
@@ -403,7 +605,14 @@ void PdnGen::trimShapes()
       if (other == shape) {
         continue;
       }
-      if (other->getNet() != shape->getNet() || !same_domain(shape, other)) {
+      auto* component = shape->getGridComponent();
+      auto* other_component = other->getGridComponent();
+      if (other->getNet() != shape->getNet()
+          || (component != nullptr && other_component != nullptr
+              && component->getDomain() != other_component->getDomain())
+          || (shape->getType() != odb::dbWireShapeType::FOLLOWPIN
+              && (other_component == nullptr
+                  || other_component->type() != GridComponent::kPadConnect))) {
         continue;
       }
       const odb::Rect connection = shape->getRect().intersect(other->getRect());
@@ -432,7 +641,13 @@ void PdnGen::trimShapes()
 
         std::unique_ptr<Shape> new_shape = nullptr;
         odb::Rect min_rect = shape->getMinimumRect();
-        add_same_layer_connections(shape, min_rect);
+        auto* component = shape->getGridComponent();
+        if (shape->getType() == odb::dbWireShapeType::FOLLOWPIN
+            || (component->type() == GridComponent::kStrap
+                && static_cast<Straps*>(component)->getExtendMode()
+                       == kRings)) {
+          add_same_layer_connections(shape, min_rect);
+        }
         auto& layer = tech_layers[shape->getLayer()];
         if (layer == nullptr) {
           layer = std::make_unique<TechLayer>(shape->getLayer());
@@ -472,7 +687,6 @@ void PdnGen::trimShapes()
           new_shape->setRect(new_rect);
         }
 
-        auto* component = shape->getGridComponent();
         if (new_shape == nullptr) {
           if (shape->isRemovable(is_pin_layer)) {
             component->removeShape(shape.get());
@@ -1163,10 +1377,11 @@ void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
 
   std::map<Shape*, std::vector<odb::dbBox*>, decltype(shape_less)> shape_map(
       shape_less);
+  Grid::ViaShapeMap via_shapes;
   for (auto* domain : domains) {
     for (const auto& grid : domain->getGrids()) {
       const auto db_shapes
-          = grid->writeToDb(net_map, net_bterm_map, obstructions);
+          = grid->writeToDb(net_map, net_bterm_map, obstructions, via_shapes);
       shape_map.insert(db_shapes.begin(), db_shapes.end());
 
       grid->makeRoutingObstructions(db_->getChip()->getBlock());
@@ -1187,6 +1402,96 @@ void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
         }
       }
     }
+  }
+
+  repairViaConflicts(via_shapes, net_map);
+
+  ShapeVectorMap routes;
+  ShapeVectorMap via_metals;
+  std::map<Shape*, odb::dbSBox*> metal_vias;
+  for (const auto& [net, swire] : net_map) {
+    for (auto* box : swire->getWires()) {
+      if (!box->isVia()) {
+        auto* layer = box->getTechLayer();
+        routes[layer].push_back(std::make_shared<Shape>(
+            layer, net, box->getBox(), box->getWireShapeType()));
+        continue;
+      }
+      std::vector<odb::dbShape> via_boxes;
+      box->getViaBoxes(via_boxes);
+      for (const auto& via_box : via_boxes) {
+        auto* layer = via_box.getTechLayer();
+        if (layer->getType() != odb::dbTechLayerType::ROUTING) {
+          continue;
+        }
+        auto shape = std::make_shared<Shape>(
+            layer, net, via_box.getBox(), odb::dbWireShapeType::DRCFILL);
+        shape->generateObstruction();
+        metal_vias[shape.get()] = box;
+        via_metals[layer].push_back(std::move(shape));
+      }
+    }
+  }
+  const Shape::ShapeTreeMap route_trees(routes.begin(), routes.end());
+  std::set<std::tuple<odb::dbNet*, odb::dbTechLayer*, odb::Rect>>
+      enclosure_repairs;
+  for (const auto& [layer, metals] : via_metals) {
+    const Shape::ObstructionTree metal_tree(metals.begin(), metals.end());
+    auto add_repair = [&](odb::dbNet* net, const odb::Rect& repair) {
+      const auto route_tree = route_trees.find(layer);
+      if (route_tree != route_trees.end()
+          && route_tree->second.qbegin(
+                 bgi::intersects(repair)
+                 && bgi::satisfies([&](const auto& route) {
+                      return route->getNet() == net
+                             && route->getRect().contains(repair);
+                    }))
+                 != route_tree->second.qend()) {
+        return;
+      }
+      enclosure_repairs.emplace(net, layer, repair);
+    };
+    for (const auto& metal : metals) {
+      for (auto it = metal_tree.qbegin(bgi::intersects(metal->getRect()));
+           it != metal_tree.qend();
+           it++) {
+        const auto& other = *it;
+        if (metal_vias.at(metal.get())->getViaXY()
+                == metal_vias.at(other.get())->getViaXY()
+            || metal->getNet() != other->getNet()) {
+          continue;
+        }
+        const odb::Rect& rect = metal->getRect();
+        const odb::Rect& other_rect = other->getRect();
+        const int xlo = std::max(rect.xMin(), other_rect.xMin());
+        const int xhi = std::min(rect.xMax(), other_rect.xMax());
+        const int ylo = std::max(rect.yMin(), other_rect.yMin());
+        const int yhi = std::min(rect.yMax(), other_rect.yMax());
+        if (xlo < xhi) {
+          const int gap_lo = std::min(rect.yMax(), other_rect.yMax());
+          const int gap_hi = std::max(rect.yMin(), other_rect.yMin());
+          if (gap_lo < gap_hi) {
+            add_repair(metal->getNet(), odb::Rect(xlo, gap_lo, xhi, gap_hi));
+          }
+        } else if (ylo < yhi) {
+          const int gap_lo = std::min(rect.xMax(), other_rect.xMax());
+          const int gap_hi = std::max(rect.xMin(), other_rect.xMin());
+          if (gap_lo < gap_hi) {
+            add_repair(metal->getNet(), odb::Rect(gap_lo, ylo, gap_hi, yhi));
+          }
+        }
+      }
+    }
+  }
+
+  for (const auto& [net, layer, repair] : enclosure_repairs) {
+    odb::dbSBox::create(net_map.at(net),
+                        layer,
+                        repair.xMin(),
+                        repair.yMin(),
+                        repair.xMax(),
+                        repair.yMax(),
+                        odb::dbWireShapeType::DRCFILL);
   }
 
   // Remove empty swires

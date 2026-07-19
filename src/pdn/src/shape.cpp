@@ -246,12 +246,32 @@ bool Shape::cut(const ObstructionTree& obstructions,
        it++) {
     const auto& other_shape = *it;
 
-    if (other_shape->net_ != nullptr && net_ == other_shape->net_) {
-      auto* this_component = getGridComponent();
-      auto* other_component = other_shape->getGridComponent();
-      if (this_component == nullptr || other_component == nullptr
-          || this_component->getDomain() == other_component->getDomain()) {
-        continue;
+    auto* this_component = getGridComponent();
+    auto* other_component = other_shape->getGridComponent();
+    if (other_shape->net_ != nullptr && net_ == other_shape->net_
+        && (this_component == nullptr || other_component == nullptr
+            || this_component->getDomain() == other_component->getDomain())
+        && ((this_component != nullptr
+             && this_component->type() == GridComponent::kPadConnect)
+            || (other_component != nullptr
+                && other_component->type() == GridComponent::kPadConnect))) {
+      continue;
+    }
+
+    if (other_shape->net_ != nullptr && net_ == other_shape->net_
+        && other_shape->shapeType() != ShapeType::kShape) {
+      // obstruction is of the same net, so see if the violation is completely
+      // inside the new strap and therefore is okay
+      if (is_horizontal) {
+        if (rect_.yMin() <= other_shape->rect_.yMin()
+            && rect_.yMax() >= other_shape->rect_.yMax()) {
+          continue;
+        }
+      } else {
+        if (rect_.xMin() <= other_shape->rect_.xMin()
+            && rect_.xMax() >= other_shape->rect_.xMax()) {
+          continue;
+        }
       }
     }
 

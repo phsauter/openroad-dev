@@ -652,10 +652,11 @@ void SRoute::createSrouteWires(
     Shape::populateMapFromDb(net, obstructions_vec);
     const Shape::ObstructionTreeMap obstructions
         = Shape::convertVectorToObstructionTree(obstructions_vec);
+    Grid::ViaShapeMap via_shapes;
 
     for (auto* domain : domains) {
       for (const auto& grid : domain->getGrids()) {
-        grid->writeToDb(net_map, {}, obstructions);
+        grid->writeToDb(net_map, {}, obstructions, via_shapes);
         grid->makeRoutingObstructions(db_->getChip()->getBlock());
       }
     }

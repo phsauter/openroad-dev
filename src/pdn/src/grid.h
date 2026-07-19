@@ -35,6 +35,8 @@ class PdnGen;
 class Grid
 {
  public:
+  using ViaShapeMap = std::map<Via*, odb::PtrSet<odb::dbSBox>>;
+
   enum Type
   {
     kCore,
@@ -150,7 +152,8 @@ class Grid
   std::map<Shape*, std::vector<odb::dbBox*>> writeToDb(
       const odb::PtrMap<odb::dbNet, odb::dbSWire*>& net_map,
       const odb::PtrMap<odb::dbNet, odb::dbBTerm*>& bterm_map,
-      const Shape::ObstructionTreeMap& obstructions) const;
+      const Shape::ObstructionTreeMap& obstructions,
+      ViaShapeMap& via_shapes) const;
   void makeRoutingObstructions(odb::dbBlock* block) const;
 
   static void makeInitialObstructions(

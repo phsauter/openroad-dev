@@ -1445,7 +1445,8 @@ void Grid::removeGridComponent(GridComponent* component)
 std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
     const odb::PtrMap<odb::dbNet, odb::dbSWire*>& net_map,
     const odb::PtrMap<odb::dbNet, odb::dbBTerm*>& bterm_map,
-    const Shape::ObstructionTreeMap& obstructions) const
+    const Shape::ObstructionTreeMap& obstructions,
+    ViaShapeMap& written_vias) const
 {
   // write vias first do shapes can be adjusted if needed
   std::vector<ViaPtr> vias;
@@ -1467,7 +1468,7 @@ std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
     return std::tie(l_low_level, l_high_level, l_area)
            < std::tie(r_low_level, r_high_level, r_area);
   });
-  std::map<Via*, odb::PtrSet<odb::dbSBox>> via_shapes;
+  ViaShapeMap via_shapes;
   for (const auto& via : vias) {
     auto net = net_map.find(via->getNet());
     if (net == net_map.end()) {
@@ -1484,7 +1485,10 @@ std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
         }
       }
     }
+    std::erase_if(via_shapes,
+                  [](const auto& via) { return !via.first->isValid(); });
   }
+  written_vias.insert(via_shapes.begin(), via_shapes.end());
   for (const auto& connect : connect_) {
     connect->printViaReport();
   }
