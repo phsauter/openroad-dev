@@ -50,7 +50,9 @@ or_integration_tests(
     core_grid_strap_count
     core_grid_strap_outside_core
     core_grid_trim_rail_stub
+    core_grid_via_bridge
     core_grid_via_snap
+    core_grid_via_spacing
     core_grid_with_multiple_bterms
     core_grid_with_no_grid
     core_grid_with_M6_min_area

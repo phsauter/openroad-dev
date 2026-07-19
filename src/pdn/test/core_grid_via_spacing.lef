@@ -1,0 +1,36 @@
+VERSION 5.8 ;
+
+VIA M2M3_BIG DEFAULT
+  LAYER met2 ;
+    RECT -0.8 -1.2 0.8 1.2 ;
+  LAYER via2 ;
+    RECT -0.7 -1.0 -0.5 -0.8 ;
+    RECT 0.5 -1.0 0.7 -0.8 ;
+    RECT -0.7 0.8 -0.5 1.0 ;
+    RECT 0.5 0.8 0.7 1.0 ;
+  LAYER met3 ;
+    RECT -0.8 -1.2 0.8 1.2 ;
+END M2M3_BIG
+
+VIA M3M4_SMALL DEFAULT
+  LAYER met3 ;
+    RECT -0.8 -0.15 0.8 0.15 ;
+  LAYER via3 ;
+    RECT -0.1 -0.1 0.1 0.1 ;
+  LAYER met4 ;
+    RECT -0.8 -0.15 0.8 0.15 ;
+END M3M4_SMALL
+
+VIA M3M4_BIG DEFAULT
+  LAYER met3 ;
+    RECT -0.8 -1.2 0.8 1.2 ;
+  LAYER via3 ;
+    RECT -0.7 -1.0 -0.5 -0.8 ;
+    RECT 0.5 -1.0 0.7 -0.8 ;
+    RECT -0.7 0.8 -0.5 1.0 ;
+    RECT 0.5 0.8 0.7 1.0 ;
+  LAYER met4 ;
+    RECT -0.8 -1.2 0.8 1.2 ;
+END M3M4_BIG
+
+END LIBRARY
