@@ -52,6 +52,7 @@ sta::define_cmd_args "global_placement" {\
     [-pulsed_placement_iterations pulsed_placement_iterations]\
     [-pulsed_placement_weight_factor pulsed_placement_weight_factor]\
     [-pulsed_placement_end_weight_factor pulsed_placement_end_weight_factor]\
+    [-pulsed_placement_shape_factor pulsed_placement_shape_factor]\
     [-simple_net_weighting]\
     [-simple_net_weighting_max_weight simple_net_weighting_max_weight]
 }
@@ -83,7 +84,8 @@ proc global_placement { args } {
       -pulsed_placement_overflow \
       -pulsed_placement_iterations \
       -pulsed_placement_weight_factor \
-      -pulsed_placement_end_weight_factor } \
+      -pulsed_placement_end_weight_factor \
+      -pulsed_placement_shape_factor } \
     flags {-skip_initial_place \
       -force_center_initial_place \
       -skip_nesterov_place \

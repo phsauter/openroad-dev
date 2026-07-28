@@ -99,6 +99,7 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-pulsed_placement_iterations", options.pulsedPlacementIterations);
   checkKey(keys, "-pulsed_placement_weight_factor", options.pulsedPlacementWeightFactor);
   checkKey(keys, "-pulsed_placement_end_weight_factor", options.pulsedPlacementEndWeightFactor);
+  checkKey(keys, "-pulsed_placement_shape_factor", options.pulsedPlacementShapeFactor);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {
