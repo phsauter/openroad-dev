@@ -57,6 +57,15 @@ class HeatMapDataSource
     std::function<const std::string()> getter;
     std::function<void(const std::string&)> setter;
   };
+  struct MapSettingSpinBox
+  {
+    std::string name;
+    std::string label;
+    std::function<double()> getter;
+    std::function<void(double)> setter;
+    double min_value;
+    double max_value;
+  };
 
   struct MapColor
   {
@@ -68,7 +77,7 @@ class HeatMapDataSource
 
   using Map = boost::multi_array<std::shared_ptr<MapColor>, 2>;
   using MapView = Map::array_view<2>::type;
-  using MapSetting = std::variant<MapSettingBoolean, MapSettingMultiChoice>;
+  using MapSetting = std::variant<MapSettingBoolean, MapSettingMultiChoice, MapSettingSpinBox>;
 
   HeatMapDataSource(utl::Logger* logger,
                     const std::string& name,
@@ -190,6 +199,12 @@ class HeatMapDataSource
   void setUnregisterCallback(std::function<void(HeatMapDataSource*)> callback);
 
  protected:
+  void addSpinBoxSetting(const std::string& name,
+                         const std::string& label,
+                         const std::function<double()>& getter,
+                         const std::function<void(double)>& setter,
+                         double min_value,
+                         double max_value);
   void addBooleanSetting(const std::string& name,
                          const std::string& label,
                          const std::function<bool()>& getter,

@@ -111,12 +111,12 @@ void Rudy::getResourceReductions()
         continue;
       }
       float cap_usage_data = tile_reduction / tile_cap;
-      tile.addRudy(cap_usage_data * 100);
+      tile.addRudyReduction(cap_usage_data * 100);
     }
   }
 }
 
-void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection)
+void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, float max_net_aspect_ratio)
 {
   // Clear previous computation
   for (auto& grid_column : grid_) {
@@ -129,20 +129,28 @@ void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection)
 
   if (selection.has_value()) {
     for (auto net : *selection.value()) {
-      processNet(net);
+      processNet(net, max_net_aspect_ratio);
     }
   } else {
     for (auto net : block_->getNets()) {
-      processNet(net);
+      processNet(net, max_net_aspect_ratio);
     }
   }
 }
 
-void Rudy::processNet(odb::dbNet* net)
+void Rudy::processNet(odb::dbNet* net, float max_net_aspect_ratio)
 {
   // refer: https://ieeexplore.ieee.org/document/4211973
   if (!net->getSigType().isSupply()) {
     const auto net_rect = net->getTermBBox();
+
+    // Skip nets with higher aspect ratio
+    const auto net_aspect_ratio1 = net_rect.dy() > 0 ? static_cast<float>(net_rect.dx()) / net_rect.dy() : 0.0f;
+    const auto net_aspect_ratio2 = net_rect.dx() > 0 ? static_cast<float>(net_rect.dy()) / net_rect.dx() : 0.0f;
+    const auto net_aspect_ratio = std::max(net_aspect_ratio1, net_aspect_ratio2);
+    if (max_net_aspect_ratio > 0 && net_aspect_ratio > max_net_aspect_ratio) {
+      return;
+    }
     processIntersectionSignalNet(net_rect);
   }
 }
@@ -171,6 +179,8 @@ void Rudy::processIntersectionSignalNet(const odb::Rect net_rect)
   const int max_y_index = std::min(
       tile_cnt_y_ - 1, (net_rect.yMax() - grid_block_.yMin()) / tile_size_);
 
+  const int rudy_range = std::max(0, static_cast<int>(std::log2(hpwl / (tile_size_ * 2))));
+
   // Iterate over the tiles in the calculated range
   for (int x = min_x_index; x <= max_x_index; ++x) {
     for (int y = min_y_index; y <= max_y_index; ++y) {
@@ -182,7 +192,7 @@ void Rudy::processIntersectionSignalNet(const odb::Rect net_rect)
         const auto tile_net_box_ratio = static_cast<float>(intersect_area)
                                         / static_cast<float>(tile_area);
         const auto rudy = net_congestion * tile_net_box_ratio * 100;
-        tile.addRudy(rudy);
+        tile.addRudy(rudy, rudy_range);
       }
     }
   }
@@ -201,9 +211,33 @@ void Rudy::Tile::setRect(int lx, int ly, int ux, int uy)
   rect_ = odb::Rect(lx, ly, ux, uy);
 }
 
-void Rudy::Tile::addRudy(float rudy)
+void Rudy::Tile::addRudy(float rudy, int range)
 {
-  rudy_ += rudy;
+  assert(range >= 0);
+  if (rudy_.size() <= range) {
+    rudy_.resize(range + 1, 0.0f);
+  }
+  rudy_[range] += rudy;
+}
+
+float Rudy::Tile::getRudy(int range) const
+{
+  if (range == -1) {
+    return rudy_reduction_;
+  }
+  if (range < 0 || range >= rudy_.size()) {
+    return 0.0f;
+  }
+  return rudy_[range];
+}
+
+float Rudy::Tile::getRudy() const
+{
+  float total_rudy = rudy_reduction_;
+  for (const auto& rudy_value : rudy_) {
+    total_rudy += rudy_value;
+  }
+  return total_rudy;
 }
 
 }  // namespace grt

@@ -45,12 +45,40 @@ RUDYDataSource::RUDYDataSource(utl::Logger* logger,
   db_ = db;
   rudy_ = nullptr;
   selection_only_ = false;
+  show_total_rudy_ = true;
+  rudy_range_ = -1;
 
   addBooleanSetting(
       "Selection",
       "Only consider nets in selection",
       [this]() { return selection_only_; },
       [this](bool value) { selection_only_ = value; });
+
+  addBooleanSetting(
+      "Show Total Rudy",
+      "Show total Rudy value",
+      [this]() { return show_total_rudy_; },
+      [this](bool value) { show_total_rudy_ = value; });
+    
+  addSpinBoxSetting(
+      "Rudy Range",
+      "Rudy Range:",
+      [this]() { return rudy_range_; },
+      [this](double value) {
+        rudy_range_ = static_cast<int>(value);
+      },
+      -1.0,
+      64.0);
+
+  addSpinBoxSetting(
+      "Max Net Aspect Ratio",
+      "Max Net Aspect Ratio (< 0 for no limit):",
+      [this]() { return max_net_aspect_ratio_; },
+      [this](double value) {
+        max_net_aspect_ratio_ = static_cast<float>(value);
+      },
+      -1.0,
+      1 << 20);
 }
 
 void RUDYDataSource::combineMapData(bool base_has_value,
@@ -141,17 +169,22 @@ bool RUDYDataSource::populateMap()
         selection.insert(std::any_cast<odb::dbNet*>(item.getObject()));
       }
     }
-    rudy_->calculateRudy(&selection);
+    rudy_->calculateRudy(&selection, max_net_aspect_ratio_);  // Pass the max_net_aspect_ratio_ to calculateRudy
   } else {
-    rudy_->calculateRudy();
+    rudy_->calculateRudy(std::nullopt, max_net_aspect_ratio_);  // Pass the max_net_aspect_ratio_ to calculateRudy
   }
 
   for (int x = 0; x < x_grid_size; ++x) {
     for (int y = 0; y < y_grid_size; ++y) {
       const auto& tile = rudy_->getTile(x, y);
       const auto& box = tile.getRect();
-      const double value = tile.getRudy();
-      addToMap(box, value);
+      if (show_total_rudy_) {
+        const double value = tile.getRudy();
+        addToMap(box, value);
+      } else {
+        const double value = tile.getRudy(rudy_range_);
+        addToMap(box, value);
+      }
     }
   }
   return true;

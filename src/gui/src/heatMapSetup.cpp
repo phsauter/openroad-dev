@@ -58,6 +58,10 @@ HeatMapSetup::HeatMapSetup(HeatMapDataSource& source,
                    option)) {
       addMultiChoiceOption(
           form, std::get<HeatMapDataSource::MapSettingMultiChoice>(option));
+    } else if (std::holds_alternative<HeatMapDataSource::MapSettingSpinBox>(
+                   option)) {
+      addSpinBoxOption(form,
+                       std::get<HeatMapDataSource::MapSettingSpinBox>(option));
     }
   }
 
@@ -338,6 +342,24 @@ void HeatMapSetup::updateUseSelectedOnly(int option)
 {
   source_.setUseSelectedOnly(option == Qt::Checked);
   emit changed();
+}
+
+void HeatMapSetup::addSpinBoxOption(QFormLayout* layout,
+                                 const HeatMapDataSource::MapSettingSpinBox& option)
+{
+  QSpinBox* spin_box = new QSpinBox(this);
+  spin_box->setRange(option.min_value, option.max_value);
+  spin_box->setValue(option.getter());
+
+  layout->addRow(QString::fromStdString(option.label), spin_box);
+
+  QObject::connect(spin_box,
+                   qOverload<int>(&QSpinBox::valueChanged),
+                   [this, option](int value) {
+                     option.setter(value);
+                     destroyMap();
+                     source_.redraw();
+                   });
 }
 
 void HeatMapSetup::addBooleanOption(

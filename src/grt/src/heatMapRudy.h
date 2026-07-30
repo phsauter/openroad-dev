@@ -53,6 +53,9 @@ class RUDYDataSource : public gui::GlobalRoutingDataSource,
   odb::dbDatabase* db_;
   grt::Rudy* rudy_;
   bool selection_only_;
+  bool show_total_rudy_;
+  int rudy_range_;
+  float max_net_aspect_ratio_ = -1.0f;
 };
 
 gui::HeatMapSourceHandle registerRudyHeatMapSource(utl::Logger* logger,

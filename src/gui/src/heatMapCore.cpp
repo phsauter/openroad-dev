@@ -354,6 +354,17 @@ std::string HeatMapDataSource::formatValue(double value, bool legend) const
   return text;
 }
 
+void HeatMapDataSource::addSpinBoxSetting(const std::string& name,
+                                      const std::string& label,
+                                      const std::function<double()>& getter,
+                                      const std::function<void(double)>& setter,
+                                      double min_value,
+                                      double max_value)
+{
+  settings_.emplace_back(MapSettingSpinBox{
+      name, label, getter, setter, min_value, max_value});
+}
+
 void HeatMapDataSource::addBooleanSetting(
     const std::string& name,
     const std::string& label,
@@ -396,6 +407,9 @@ Renderer::Settings HeatMapDataSource::getSettings() const
     } else if (std::holds_alternative<MapSettingMultiChoice>(setting)) {
       const auto& set = std::get<MapSettingMultiChoice>(setting);
       settings[set.name] = set.getter();
+    } else if (std::holds_alternative<MapSettingSpinBox>(setting)) {
+      const auto& set = std::get<MapSettingSpinBox>(setting);
+      settings[set.name] = set.getter();
     }
   }
 
@@ -429,6 +443,11 @@ void HeatMapDataSource::setSettings(const Renderer::Settings& settings)
       const auto& set = std::get<MapSettingMultiChoice>(setting);
       std::string temp_value = set.getter();
       Renderer::setSetting<std::string>(settings, set.name, temp_value);
+      set.setter(temp_value);
+    } else if (std::holds_alternative<MapSettingSpinBox>(setting)) {
+      const auto& set = std::get<MapSettingSpinBox>(setting);
+      double temp_value = set.getter();
+      Renderer::setSetting<double>(settings, set.name, temp_value);
       set.setter(temp_value);
     }
   }

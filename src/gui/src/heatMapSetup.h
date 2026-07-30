@@ -71,6 +71,8 @@ class HeatMapSetup : public QDialog
   QPushButton* rebuild_;
   QPushButton* close_;
 
+  void addSpinBoxOption(QFormLayout* layout,
+                        const HeatMapDataSource::MapSettingSpinBox& option);
   void addBooleanOption(QFormLayout* layout,
                         const HeatMapDataSource::MapSettingBoolean& option);
   void addMultiChoiceOption(

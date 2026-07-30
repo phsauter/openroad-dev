@@ -28,13 +28,16 @@ class Rudy
    public:
     odb::Rect getRect() const { return rect_; }
     void setRect(int lx, int ly, int ux, int uy);
-    void addRudy(float rudy);
-    float getRudy() const { return rudy_; }
-    void clearRudy() { rudy_ = 0.0; }
+    void addRudy(float rudy, int range);
+    void addRudyReduction(float reduction) { rudy_reduction_ += reduction; }
+    float getRudy() const;
+    float getRudy(int range) const;
+    void clearRudy() { rudy_.clear(); rudy_reduction_ = 0.0f; }
 
    private:
     odb::Rect rect_;
-    float rudy_ = 0;
+    std::vector<float> rudy_; // per range
+    float rudy_reduction_ = 0.0f; // additional reduction factor
   };
 
   explicit Rudy(odb::dbBlock* block, grt::GlobalRouter* grouter);
@@ -44,7 +47,7 @@ class Rudy
    * `setWireWidth`.
    * */
   void calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection
-                     = std::nullopt);
+                     = std::nullopt, float max_net_aspect_ratio = -1.0f);
 
   /**
    * Set the grid area and grid numbers.
@@ -70,7 +73,7 @@ class Rudy
   void makeGrid();
   void getResourceReductions();
   Tile& getEditableTile(int x, int y) { return grid_.at(x).at(y); }
-  void processNet(odb::dbNet* net);
+  void processNet(odb::dbNet* net, float max_net_aspect_ratio);
   void processIntersectionSignalNet(odb::Rect net_rect);
 
   odb::dbBlock* block_;
