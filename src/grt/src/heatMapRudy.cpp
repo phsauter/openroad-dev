@@ -61,14 +61,12 @@ RUDYDataSource::RUDYDataSource(utl::Logger* logger,
       "Show total Rudy value",
       [this]() { return show_total_rudy_; },
       [this](bool value) { show_total_rudy_ = value; });
-    
+
   addSpinBoxSetting(
       "Rudy Range",
       "Rudy Range:",
       [this]() { return rudy_range_; },
-      [this](double value) {
-        rudy_range_ = static_cast<int>(value);
-      },
+      [this](double value) { rudy_range_ = static_cast<int>(value); },
       -1.0,
       64.0);
 
@@ -90,6 +88,13 @@ RUDYDataSource::RUDYDataSource(utl::Logger* logger,
       },
       2,
       1 << 20);
+  addSpinBoxSetting(
+      "Gaussian Blur Radius",
+      "Gaussian Blur Radius (0 for no blur):",
+      [this]() { return gaussian_blur_radius_; },
+      [this](double value) { gaussian_blur_radius_ = static_cast<int>(value); },
+      0,
+      20);
 }
 
 void RUDYDataSource::combineMapData(bool base_has_value,
@@ -180,9 +185,19 @@ bool RUDYDataSource::populateMap()
         selection.insert(std::any_cast<odb::dbNet*>(item.getObject()));
       }
     }
-    rudy_->calculateRudy(&selection, max_net_aspect_ratio_, aspect_ratio_max_pins_);  // Pass the max_net_aspect_ratio_ and aspect_ratio_max_pins_ to calculateRudy
+    rudy_->calculateRudy(
+        &selection,
+        max_net_aspect_ratio_,
+        aspect_ratio_max_pins_,
+        gaussian_blur_radius_);  // Pass the max_net_aspect_ratio_ and
+                                 // aspect_ratio_max_pins_ to calculateRudy
   } else {
-    rudy_->calculateRudy(std::nullopt, max_net_aspect_ratio_, aspect_ratio_max_pins_);  // Pass the max_net_aspect_ratio_ and aspect_ratio_max_pins_ to calculateRudy
+    rudy_->calculateRudy(
+        std::nullopt,
+        max_net_aspect_ratio_,
+        aspect_ratio_max_pins_,
+        gaussian_blur_radius_);  // Pass the max_net_aspect_ratio_ and
+                                 // aspect_ratio_max_pins_ to calculateRudy
   }
 
   for (int x = 0; x < x_grid_size; ++x) {

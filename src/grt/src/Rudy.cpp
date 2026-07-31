@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -116,7 +117,10 @@ void Rudy::getResourceReductions()
   }
 }
 
-void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, float max_net_aspect_ratio, int aspect_ratio_max_pins)
+void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection,
+                         float max_net_aspect_ratio,
+                         int aspect_ratio_max_pins,
+                         int gaussian_blur_radius)
 {
   // Clear previous computation
   for (auto& grid_column : grid_) {
@@ -136,20 +140,120 @@ void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, floa
       processNet(net, max_net_aspect_ratio, aspect_ratio_max_pins);
     }
   }
+
+  applyGaussianBlur(gaussian_blur_radius);
 }
 
-void Rudy::processNet(odb::dbNet* net, float max_net_aspect_ratio, int aspect_ratio_max_pins)
+void Rudy::applyGaussianBlur(int radius)
+{
+  if (radius <= 0 || grid_.empty() || grid_[0].empty()) {
+    return;
+  }
+
+  // Truncated, normalized 1D Gaussian kernel. sigma = radius / 2 keeps about
+  // two sigma inside the window, so a radius of N blurs over a (2N+1)^2 area.
+  const float sigma = radius / 2.0f;
+  const int kernel_size = 2 * radius + 1;
+  std::vector<float> kernel(kernel_size);
+  float kernel_sum = 0.0f;
+  for (int d = -radius; d <= radius; ++d) {
+    const float weight = std::exp(-(d * d) / (2.0f * sigma * sigma));
+    kernel[d + radius] = weight;
+    kernel_sum += weight;
+  }
+  for (auto& weight : kernel) {
+    weight /= kernel_sum;
+  }
+
+  const int x_cnt = grid_.size();
+  const int y_cnt = grid_[0].size();
+
+  // Number of range levels stored across all tiles.
+  int max_range = 0;
+  for (int x = 0; x < x_cnt; ++x) {
+    for (int y = 0; y < y_cnt; ++y) {
+      max_range = std::max(max_range,
+                           static_cast<int>(grid_[x][y].getRudyRangeCount()));
+    }
+  }
+  if (max_range == 0) {
+    return;
+  }
+
+  std::vector<std::vector<float>> values(x_cnt,
+                                         std::vector<float>(y_cnt, 0.0f));
+  std::vector<std::vector<float>> temp(x_cnt, std::vector<float>(y_cnt, 0.0f));
+
+  // Blur each rudy range level independently. Tiles that do not store a given
+  // range contribute 0, consistent with getRudy(range). The capacity reduction
+  // (rudy_reduction_) is intentionally left untouched.
+  for (int range = 0; range < max_range; ++range) {
+    for (int x = 0; x < x_cnt; ++x) {
+      for (int y = 0; y < y_cnt; ++y) {
+        values[x][y] = grid_[x][y].getRudy(range);
+      }
+    }
+
+    // Horizontal pass.
+    for (int x = 0; x < x_cnt; ++x) {
+      for (int y = 0; y < y_cnt; ++y) {
+        float acc = 0.0f;
+        float weight_sum = 0.0f;
+        for (int dx = -radius; dx <= radius; ++dx) {
+          const int nx = x + dx;
+          if (nx < 0 || nx >= x_cnt) {
+            continue;
+          }
+          const float weight = kernel[dx + radius];
+          acc += weight * values[nx][y];
+          weight_sum += weight;
+        }
+        temp[x][y] = acc / weight_sum;
+      }
+    }
+
+    // Vertical pass.
+    for (int x = 0; x < x_cnt; ++x) {
+      for (int y = 0; y < y_cnt; ++y) {
+        float acc = 0.0f;
+        float weight_sum = 0.0f;
+        for (int dy = -radius; dy <= radius; ++dy) {
+          const int ny = y + dy;
+          if (ny < 0 || ny >= y_cnt) {
+            continue;
+          }
+          const float weight = kernel[dy + radius];
+          acc += weight * temp[x][ny];
+          weight_sum += weight;
+        }
+        if (range < static_cast<int>(grid_[x][y].getRudyRangeCount())) {
+          grid_[x][y].setRudy(range, acc / weight_sum);
+        }
+      }
+    }
+  }
+}
+
+void Rudy::processNet(odb::dbNet* net,
+                      float max_net_aspect_ratio,
+                      int aspect_ratio_max_pins)
 {
   // refer: https://ieeexplore.ieee.org/document/4211973
   if (!net->getSigType().isSupply()) {
     const auto net_rect = net->getTermBBox();
 
     // Skip nets with higher aspect ratio and at most aspect_ratio_max_pins pins
-    const auto net_aspect_ratio1 = net_rect.dy() > 0 ? static_cast<float>(net_rect.dx()) / net_rect.dy() : 0.0f;
-    const auto net_aspect_ratio2 = net_rect.dx() > 0 ? static_cast<float>(net_rect.dy()) / net_rect.dx() : 0.0f;
-    const auto net_aspect_ratio = std::max(net_aspect_ratio1, net_aspect_ratio2);
+    const auto net_aspect_ratio1
+        = net_rect.dy() > 0 ? static_cast<float>(net_rect.dx()) / net_rect.dy()
+                            : 0.0f;
+    const auto net_aspect_ratio2
+        = net_rect.dx() > 0 ? static_cast<float>(net_rect.dy()) / net_rect.dx()
+                            : 0.0f;
+    const auto net_aspect_ratio
+        = std::max(net_aspect_ratio1, net_aspect_ratio2);
     const auto num_pins = net->getITerms().size() + net->getBTerms().size();
-    if (max_net_aspect_ratio > 0 && net_aspect_ratio > max_net_aspect_ratio && num_pins <= aspect_ratio_max_pins) {
+    if (max_net_aspect_ratio > 0 && net_aspect_ratio > max_net_aspect_ratio
+        && num_pins <= aspect_ratio_max_pins) {
       return;
     }
     processIntersectionSignalNet(net_rect);
@@ -180,7 +284,8 @@ void Rudy::processIntersectionSignalNet(const odb::Rect net_rect)
   const int max_y_index = std::min(
       tile_cnt_y_ - 1, (net_rect.yMax() - grid_block_.yMin()) / tile_size_);
 
-  const int rudy_range = std::max(0, static_cast<int>(std::log2(hpwl / (tile_size_ * 2))));
+  const int rudy_range
+      = std::max(0, static_cast<int>(std::log2(hpwl / (tile_size_ * 2))));
 
   // Iterate over the tiles in the calculated range
   for (int x = min_x_index; x <= max_x_index; ++x) {
@@ -219,6 +324,15 @@ void Rudy::Tile::addRudy(float rudy, int range)
     rudy_.resize(range + 1, 0.0f);
   }
   rudy_[range] += rudy;
+}
+
+void Rudy::Tile::setRudy(int range, float value)
+{
+  assert(range >= 0);
+  if (rudy_.size() <= range) {
+    rudy_.resize(range + 1, 0.0f);
+  }
+  rudy_[range] = value;
 }
 
 float Rudy::Tile::getRudy(int range) const
