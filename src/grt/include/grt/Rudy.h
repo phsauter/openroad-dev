@@ -47,7 +47,7 @@ class Rudy
    * `setWireWidth`.
    * */
   void calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection
-                     = std::nullopt, float max_net_aspect_ratio = -1.0f);
+                     = std::nullopt, float max_net_aspect_ratio = -1.0f, int aspect_ratio_max_pins = std::numeric_limits<int>::max());
 
   /**
    * Set the grid area and grid numbers.
@@ -73,7 +73,7 @@ class Rudy
   void makeGrid();
   void getResourceReductions();
   Tile& getEditableTile(int x, int y) { return grid_.at(x).at(y); }
-  void processNet(odb::dbNet* net, float max_net_aspect_ratio);
+  void processNet(odb::dbNet* net, float max_net_aspect_ratio, int aspect_ratio_max_pins);
   void processIntersectionSignalNet(odb::Rect net_rect);
 
   odb::dbBlock* block_;

@@ -56,6 +56,7 @@ class RUDYDataSource : public gui::GlobalRoutingDataSource,
   bool show_total_rudy_;
   int rudy_range_;
   float max_net_aspect_ratio_ = -1.0f;
+  int aspect_ratio_max_pins_ = std::numeric_limits<int>::max();
 };
 
 gui::HeatMapSourceHandle registerRudyHeatMapSource(utl::Logger* logger,

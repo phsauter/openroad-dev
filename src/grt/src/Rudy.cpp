@@ -116,7 +116,7 @@ void Rudy::getResourceReductions()
   }
 }
 
-void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, float max_net_aspect_ratio)
+void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, float max_net_aspect_ratio, int aspect_ratio_max_pins)
 {
   // Clear previous computation
   for (auto& grid_column : grid_) {
@@ -129,26 +129,27 @@ void Rudy::calculateRudy(std::optional<odb::PtrSet<odb::dbNet>*> selection, floa
 
   if (selection.has_value()) {
     for (auto net : *selection.value()) {
-      processNet(net, max_net_aspect_ratio);
+      processNet(net, max_net_aspect_ratio, aspect_ratio_max_pins);
     }
   } else {
     for (auto net : block_->getNets()) {
-      processNet(net, max_net_aspect_ratio);
+      processNet(net, max_net_aspect_ratio, aspect_ratio_max_pins);
     }
   }
 }
 
-void Rudy::processNet(odb::dbNet* net, float max_net_aspect_ratio)
+void Rudy::processNet(odb::dbNet* net, float max_net_aspect_ratio, int aspect_ratio_max_pins)
 {
   // refer: https://ieeexplore.ieee.org/document/4211973
   if (!net->getSigType().isSupply()) {
     const auto net_rect = net->getTermBBox();
 
-    // Skip nets with higher aspect ratio
+    // Skip nets with higher aspect ratio and at most aspect_ratio_max_pins pins
     const auto net_aspect_ratio1 = net_rect.dy() > 0 ? static_cast<float>(net_rect.dx()) / net_rect.dy() : 0.0f;
     const auto net_aspect_ratio2 = net_rect.dx() > 0 ? static_cast<float>(net_rect.dy()) / net_rect.dx() : 0.0f;
     const auto net_aspect_ratio = std::max(net_aspect_ratio1, net_aspect_ratio2);
-    if (max_net_aspect_ratio > 0 && net_aspect_ratio > max_net_aspect_ratio) {
+    const auto num_pins = net->getITerms().size() + net->getBTerms().size();
+    if (max_net_aspect_ratio > 0 && net_aspect_ratio > max_net_aspect_ratio && num_pins <= aspect_ratio_max_pins) {
       return;
     }
     processIntersectionSignalNet(net_rect);

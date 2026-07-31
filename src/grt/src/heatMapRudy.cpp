@@ -47,6 +47,8 @@ RUDYDataSource::RUDYDataSource(utl::Logger* logger,
   selection_only_ = false;
   show_total_rudy_ = true;
   rudy_range_ = -1;
+  max_net_aspect_ratio_ = 30.0f;
+  aspect_ratio_max_pins_ = 6;
 
   addBooleanSetting(
       "Selection",
@@ -78,6 +80,15 @@ RUDYDataSource::RUDYDataSource(utl::Logger* logger,
         max_net_aspect_ratio_ = static_cast<float>(value);
       },
       -1.0,
+      1 << 20);
+  addSpinBoxSetting(
+      "Aspect Ratio Max Pins",
+      "Max Pins for Aspect Ratio Check:",
+      [this]() { return aspect_ratio_max_pins_; },
+      [this](double value) {
+        aspect_ratio_max_pins_ = static_cast<int>(value);
+      },
+      2,
       1 << 20);
 }
 
@@ -169,9 +180,9 @@ bool RUDYDataSource::populateMap()
         selection.insert(std::any_cast<odb::dbNet*>(item.getObject()));
       }
     }
-    rudy_->calculateRudy(&selection, max_net_aspect_ratio_);  // Pass the max_net_aspect_ratio_ to calculateRudy
+    rudy_->calculateRudy(&selection, max_net_aspect_ratio_, aspect_ratio_max_pins_);  // Pass the max_net_aspect_ratio_ and aspect_ratio_max_pins_ to calculateRudy
   } else {
-    rudy_->calculateRudy(std::nullopt, max_net_aspect_ratio_);  // Pass the max_net_aspect_ratio_ to calculateRudy
+    rudy_->calculateRudy(std::nullopt, max_net_aspect_ratio_, aspect_ratio_max_pins_);  // Pass the max_net_aspect_ratio_ and aspect_ratio_max_pins_ to calculateRudy
   }
 
   for (int x = 0; x < x_grid_size; ++x) {
