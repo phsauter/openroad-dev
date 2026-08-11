@@ -30,6 +30,9 @@ sta::define_cmd_args "global_placement" {\
     [-routability_inflation_ratio_coef routability_inflation_ratio_coef]\
     [-routability_max_inflation_ratio routability_max_inflation_ratio]\
     [-routability_rc_coefficients routability_rc_coefficients]\
+    [-routability_rudy_max_net_aspect_ratio routability_rudy_max_net_aspect_ratio]\
+    [-routability_rudy_aspect_ratio_max_pins routability_rudy_aspect_ratio_max_pins]\
+    [-routability_rudy_blur_radius routability_rudy_blur_radius]\
     [-keep_resize_below_overflow keep_resize_below_overflow]\
     [-timing_driven_net_reweight_overflow timing_driven_net_reweight_overflow]\
     [-timing_driven_net_weight_max timing_driven_net_weight_max]\
@@ -53,6 +56,7 @@ sta::define_cmd_args "global_placement" {\
     [-pulsed_placement_weight_factor pulsed_placement_weight_factor]\
     [-pulsed_placement_end_weight_factor pulsed_placement_end_weight_factor]\
     [-pulsed_placement_shape_factor pulsed_placement_shape_factor]\
+    [-pulsed_routability]\
     [-simple_net_weighting]\
     [-simple_net_weighting_max_weight simple_net_weighting_max_weight]
 }
@@ -70,6 +74,9 @@ proc global_placement { args } {
       -routability_inflation_ratio_coef \
       -routability_max_inflation_ratio \
       -routability_rc_coefficients \
+      -routability_rudy_max_net_aspect_ratio \
+      -routability_rudy_aspect_ratio_max_pins \
+      -routability_rudy_blur_radius \
       -timing_driven_net_reweight_overflow \
       -timing_driven_net_weight_max \
       -timing_driven_nets_percentage \
@@ -104,7 +111,8 @@ proc global_placement { args } {
       -verbose \
       -cluster_net_based\
       -simple_net_weighting \
-      -pulsed_placement }
+      -pulsed_placement \
+      -pulsed_routability}
 
   sta::check_argc_eq0 "global_placement" $args
 

@@ -133,6 +133,10 @@ struct RouteBaseVars
   const float ignoreEdgeRatio;
   const float minInflationRatio;
 
+  const float rudyMaxNetAspectRatio;
+  const int rudyAspectRatioMaxPins;
+  const int rudyBlurRadius;
+
   // targetRC metric coefficients.
   const float rcK1, rcK2, rcK3, rcK4;
 };
@@ -156,7 +160,7 @@ class RouteBase
   void loadGrt();
   float getGrtRC() const;
 
-  void calculateRudyTiles();
+  void calculateRudyTiles(float targetCongestion = 1.0);
   void updateRudyAverage(bool verbose = true);
 
   float getRudyAverage() const { return final_average_rc_; }
@@ -170,6 +174,8 @@ class RouteBase
   // second: reverting procedure need in NesterovPlace
   //         (e.g. calling NesterovPlace's init())
   std::pair<bool, bool> routability(int routability_driven_revert_count);
+
+  void pulsedRoutability();
 
   std::vector<int64_t> inflatedAreaDelta() const;
   int64_t getTotalInflation() const;

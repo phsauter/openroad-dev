@@ -64,6 +64,9 @@ static gpl::PlaceOptions getOptions(
                     options.routabilityRcK2,
                     options.routabilityRcK3,
                     options.routabilityRcK4));
+  checkKey(keys, "-routability_rudy_max_net_aspect_ratio", options.rudyMaxNetAspectRatio);
+  checkKey(keys, "-routability_rudy_aspect_ratio_max_pins", options.rudyAspectRatioMaxPins);
+  checkKey(keys, "-routability_rudy_blur_radius", options.rudyBlurRadius);
   checkKey(keys,
            "-timing_driven_net_reweight_overflow",
            options.timingNetWeightOverflows);
@@ -100,6 +103,7 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-pulsed_placement_weight_factor", options.pulsedPlacementWeightFactor);
   checkKey(keys, "-pulsed_placement_end_weight_factor", options.pulsedPlacementEndWeightFactor);
   checkKey(keys, "-pulsed_placement_shape_factor", options.pulsedPlacementShapeFactor);
+  checkFlag(flags, "-pulsed_routability", options.pulsedRoutability);
 
   if (auto it = keys.find("-density"); it != keys.end()) {
     if (it->second == "uniform") {

@@ -87,7 +87,8 @@ class NesterovPlace
                           const std::string& routability_driven_dir,
                           int routability_driven_count,
                           int timing_driven_count,
-                          bool& final_routability_image_saved);
+                          bool& final_routability_image_saved,
+                          bool do_pulsed_iteration);
   void runTimingDriven(int iter,
                        const std::string& timing_driven_dir,
                        int routability_driven_count,
@@ -175,6 +176,7 @@ class NesterovPlace
   int recursionCntInitSLPCoef_ = 0;
 
   int placement_gif_key_ = -1;
+  int rudy_gif_key_ = -1;
   int routability_gif_key_ = -1;
 
   void init();
