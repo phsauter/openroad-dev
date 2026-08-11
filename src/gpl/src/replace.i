@@ -103,6 +103,7 @@ static gpl::PlaceOptions getOptions(
   checkKey(keys, "-pulsed_placement_weight_factor", options.pulsedPlacementWeightFactor);
   checkKey(keys, "-pulsed_placement_end_weight_factor", options.pulsedPlacementEndWeightFactor);
   checkKey(keys, "-pulsed_placement_shape_factor", options.pulsedPlacementShapeFactor);
+  checkKey(keys, "-pulsed_placement_warmup_iterations", options.pulsedPlacementWarmupIterations);
   checkFlag(flags, "-pulsed_routability", options.pulsedRoutability);
 
   if (auto it = keys.find("-density"); it != keys.end()) {

@@ -1250,6 +1250,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
   const float pulsed_placement_shape_factor
       = nbc_->getNbVars().pulsedPlacementShapeFactor;
   const int pulsed_max_iter = nbc_->getNbVars().pulsedPlacementIterations;
+  const int pulsed_warmup_iterations
+      = nbc_->getNbVars().pulsedPlacementWarmupIterations;
   const bool pulsed_routability_enabled = nbc_->getNbVars().pulsedRoutability;
   bool save_image = false;
   int pulsed_iter = 0;
@@ -1281,7 +1283,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     bool do_pulsed_iteration
         = pulsed_placement_enabled
           && average_overflow_unscaled_ < pulsed_placement_overflow
-          && pulsed_iter < pulsed_max_iter && pulsed_test_iter > 50;
+          && pulsed_iter < pulsed_max_iter + pulsed_warmup_iterations
+          && pulsed_test_iter > 50;
 
     if (do_pulsed_iteration) {
       save_image = true;
@@ -1305,13 +1308,17 @@ int NesterovPlace::doNesterovPlace(int start_iter)
     }
 
     if (do_pulsed_iteration) {
-      const float pulsed_placement_weight_factor
-          = pulsed_placement_end_weight
-            + (pulsed_placement_start_weight - pulsed_placement_end_weight)
-                  * std::pow(1.0f
-                                 - (static_cast<float>(pulsed_iter)
-                                    / static_cast<float>(pulsed_max_iter)),
-                             pulsed_placement_shape_factor);
+      float pulsed_placement_weight_factor = pulsed_placement_start_weight;
+      if (pulsed_iter >= pulsed_warmup_iterations) {
+        const int scheduled_iter = pulsed_iter - pulsed_warmup_iterations;
+        pulsed_placement_weight_factor
+            = pulsed_placement_end_weight
+              + (pulsed_placement_start_weight - pulsed_placement_end_weight)
+                    * std::pow(1.0f
+                                   - (static_cast<float>(scheduled_iter)
+                                      / static_cast<float>(pulsed_max_iter)),
+                               pulsed_placement_shape_factor);
+      }
       log_->info(GPL,
                  1000,
                  "Pulsed iteration: {} at {}, overflow: {} < {}, "
@@ -1333,7 +1340,8 @@ int NesterovPlace::doNesterovPlace(int start_iter)
 
       reportModuleCenters();
 
-      if (pulsed_routability_enabled) {
+      if (pulsed_routability_enabled
+          && pulsed_iter > pulsed_warmup_iterations) {
         log_->info(GPL, 1018, "Pulsed routability");
         rb_->pulsedRoutability();
       }
