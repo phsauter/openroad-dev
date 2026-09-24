@@ -341,6 +341,15 @@ void FlexDRWorker::modMinSpacingCostPlanarHelper(const odb::Rect& box,
   bool use_min_spacing = isBlockage && router_cfg_->USEMINSPACING_OBS;
   frCoord bloatDist = getTech()->getLayer(lNum)->getMinSpacingValue(
       width1, width2, box.maxDXDY(), use_min_spacing);
+  if (router_cfg_->CONSERVATIVE_SAME_MASK_SPACING
+      && (type == ModCostType::addRouteShape
+          || type == ModCostType::subRouteShape)) {
+    // These updates affect routeShapeCost only; fixedShapeCost (including
+    // pin-access geometry handled separately) remains on ordinary spacing.
+    bloatDist = std::max(bloatDist,
+                         getTech()->getLayer(lNum)->getSameMaskSpacing(
+                             width1, width2, box.maxDXDY()));
+  }
   bloatDist = std::max(bloatDist, minSpacing);
   frSquaredDistance bloatDistSquare = bloatDist;
   bloatDistSquare *= bloatDist;

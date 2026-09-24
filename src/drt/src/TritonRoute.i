@@ -65,6 +65,7 @@ void detailed_route_cmd(const char* outputMazeFile,
                         bool singleStepDR,
                         int minAccessPoints,
                         bool saveGuideUpdates,
+                        bool conservativeSameMaskSpacing,
                         const char* repairPDNLayerName,
                         int drcReportIterStep)
 {
@@ -88,6 +89,7 @@ void detailed_route_cmd(const char* outputMazeFile,
                     singleStepDR,
                     minAccessPoints,
                     saveGuideUpdates,
+                    conservativeSameMaskSpacing,
                     repairPDNLayerName,
                     num_threads});
   router->main();

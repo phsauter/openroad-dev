@@ -310,6 +310,70 @@ class frLayer
                              frCoord prl,
                              bool use_min_spacing);
   void setMinSpacing(frConstraint* in) { minSpc_ = in; }
+  void setSameMaskSpacing(frCoord in) { sameMaskSpacing_ = in; }
+  void addSameMaskSpacingRow(frCoord width,
+                             frCoord prl,
+                             const std::vector<frCoord>& values)
+  {
+    sameMaskRows_.push_back({width, prl, values});
+  }
+  bool validateSameMaskSpacingTable() const
+  {
+    if (sameMaskRows_.empty()) {
+      return false;
+    }
+    if (sameMaskRows_.front().prl >= 0) {
+      return false;
+    }
+    for (size_t i = 0; i < sameMaskRows_.size(); ++i) {
+      const auto& row = sameMaskRows_[i];
+      if (i > 0 && row.width < sameMaskRows_[i - 1].width) {
+        return false;
+      }
+      if (i > 0 && row.width == sameMaskRows_[i - 1].width
+          && row.prl <= sameMaskRows_[i - 1].prl) {
+        return false;
+      }
+      if (row.values.size() != sameMaskRows_.size()) {
+        return false;
+      }
+    }
+    return true;
+  }
+  void clearSameMaskSpacingTable() { sameMaskRows_.clear(); }
+  size_t getSameMaskSpacingRowCount() const { return sameMaskRows_.size(); }
+  frCoord getSameMaskSpacing() const { return sameMaskSpacing_; }
+  frCoord getSameMaskSpacing(frCoord width1, frCoord width2, frCoord prl) const
+  {
+    frCoord result = sameMaskSpacing_;
+    if (sameMaskRows_.empty()) {
+      return result;
+    }
+    auto index = [&](frCoord width) {
+      auto pos = std::lower_bound(sameMaskRows_.begin(),
+                                  sameMaskRows_.end(),
+                                  width,
+                                  [](const SameMaskRow& row, frCoord value) {
+                                    return row.width < value;
+                                  });
+      if (pos != sameMaskRows_.begin()) {
+        --pos;
+      }
+      int idx = static_cast<int>(std::distance(sameMaskRows_.begin(), pos));
+      for (; idx >= 0; --idx) {
+        if (prl >= sameMaskRows_[idx].prl) {
+          return static_cast<size_t>(idx);
+        }
+      }
+      return size_t{0};
+    };
+    const size_t row = index(width1);
+    const size_t col = index(width2);
+    if (row < sameMaskRows_.size() && col < sameMaskRows_[row].values.size()) {
+      result = std::max(result, sameMaskRows_[row].values[col]);
+    }
+    return result;
+  }
   bool hasSpacingSamenet() const { return spacingSamenet_; }
   frSpacingSamenetConstraint* getSpacingSamenet() const
   {
@@ -926,6 +990,14 @@ class frLayer
       lef58SpacingWrongDirConstraints_;
 
   frConstraint* minSpc_{nullptr};
+  frCoord sameMaskSpacing_{0};
+  struct SameMaskRow
+  {
+    frCoord width;
+    frCoord prl;
+    std::vector<frCoord> values;
+  };
+  std::vector<SameMaskRow> sameMaskRows_;
   frSpacingSamenetConstraint* spacingSamenet_{nullptr};
   frSpacingTableInfluenceConstraint* spacingInfluence_{nullptr};
   std::vector<frSpacingEndOfLineConstraint*> eols_;

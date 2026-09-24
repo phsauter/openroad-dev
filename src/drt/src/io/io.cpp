@@ -13,6 +13,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -2401,6 +2402,112 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
 
   getTech()->addUConstraint(std::move(nsmetalConstraint));
   setRoutingLayerProperties(layer, tmpLayer);
+  // Preserve unsupported SAMEMASK data in the DRT technology even when this
+  // initialization is performed by a standalone pin_access command.  Whether
+  // the constraints are applied remains controlled by
+  // CONSERVATIVE_SAME_MASK_SPACING in FlexGC/FlexDR.
+  {
+    frCoord same_mask = 0;
+    for (auto prop : odb::dbProperty::getProperties(layer)) {
+      if (prop->getType() != odb::dbProperty::STRING_PROP) {
+        continue;
+      }
+      const auto value = static_cast<odb::dbStringProperty*>(prop)->getValue();
+      if (value.find("SAMEMASK") == std::string::npos) {
+        continue;
+      }
+      if (value.find("JOINTCORNERSPACING") != std::string::npos) {
+        logger_->warn(DRT,
+                      696,
+                      "Layer {} has unsupported SAMEMASK JOINTCORNERSPACING; "
+                      "route-only conservative mode does not apply it.",
+                      layer->getName());
+      }
+      std::smatch match;
+      if (std::regex_search(
+              value,
+              match,
+              std::regex(
+                  "SPACING[[:space:]]+([-+]?[0-9]*\\.?[0-9]"
+                  "+([Ee][-+]?[0-9]+)?)[[:space:]]+SAMEMASK[[:space:]]*;"))) {
+        try {
+          same_mask
+              = std::max(same_mask,
+                         frCoord(std::llround(std::stod(match[1].str())
+                                              * getTech()->getDBUPerUU())));
+        } catch (...) {
+          logger_->warn(DRT,
+                        693,
+                        "Malformed SAMEMASK spacing property on layer {}.",
+                        layer->getName());
+        }
+      }
+      const auto table_pos = value.find("SPACINGTABLE");
+      if (table_pos != std::string::npos
+          && value.find("TWOWIDTHS", table_pos) != std::string::npos) {
+        std::istringstream stream(value.substr(table_pos));
+        std::string line;
+        const std::regex number_re("[0-9]+(?:\\.[0-9]*)?(?:[Ee][+-]?[0-9]+)?");
+        while (std::getline(stream, line)) {
+          if (line.find("WIDTH") == std::string::npos) {
+            continue;
+          }
+          std::vector<double> numbers;
+          for (std::sregex_iterator it(line.begin(), line.end(), number_re),
+               end;
+               it != end;
+               ++it) {
+            numbers.push_back(std::stod(it->str()));
+          }
+          if (numbers.size() < 2) {
+            continue;
+          }
+          const double width = numbers.front();
+          size_t first_value = 1;
+          double prl = -1.0;
+          if (line.find("PRL") != std::string::npos && numbers.size() >= 3) {
+            prl = numbers[1];
+            first_value = 2;
+          }
+          std::vector<frCoord> values;
+          for (size_t i = first_value; i < numbers.size(); ++i) {
+            values.push_back(
+                frCoord(std::llround(numbers[i] * getTech()->getDBUPerUU())));
+          }
+          if (!values.empty()) {
+            tmpLayer->addSameMaskSpacingRow(
+                frCoord(std::llround(width * getTech()->getDBUPerUU())),
+                prl < 0 ? -1
+                        : frCoord(std::llround(prl * getTech()->getDBUPerUU())),
+                values);
+          }
+        }
+        if (!tmpLayer->validateSameMaskSpacingTable()) {
+          logger_->warn(DRT,
+                        697,
+                        "Ignoring malformed/non-square SAMEMASK spacing table "
+                        "on layer {}.",
+                        layer->getName());
+          tmpLayer->clearSameMaskSpacingTable();
+        } else {
+          logger_->info(DRT,
+                        695,
+                        "Layer {} loaded a {}-row route-only SAMEMASK "
+                        "TWOWIDTHS table.",
+                        layer->getName(),
+                        tmpLayer->getSameMaskSpacingRowCount());
+        }
+      }
+    }
+    if (same_mask > 0) {
+      tmpLayer->setSameMaskSpacing(same_mask);
+      logger_->info(DRT,
+                    694,
+                    "Layer {} route-only SAMEMASK spacing floor: {} DBU.",
+                    layer->getName(),
+                    same_mask);
+    }
+  }
   // read minArea rule
   if (layer->hasArea()) {
     frCoord minArea = frCoord(layer->getArea());

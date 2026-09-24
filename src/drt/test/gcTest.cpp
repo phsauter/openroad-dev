@@ -11,6 +11,7 @@
 #include "db/obj/frMarker.h"
 #include "db/obj/frNet.h"
 #include "db/tech/frConstraint.h"
+#include "db/tech/frLayer.h"
 #include "db/tech/frViaDef.h"
 #include "fixture.h"
 #include "frBaseTypes.h"
@@ -24,6 +25,53 @@
 using odb::dbTechLayerType;
 
 namespace drt {
+
+TEST(SameMaskSpacingTest, LookupAndValidation)
+{
+  frLayer layer;
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 100, 0), 0);
+  layer.setSameMaskSpacing(40);
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 100, 0), 40);
+
+  // GF-style TWOWIDTHS rows: width breakpoints and PRL breakpoints follow
+  // OpenDB getTwIdx semantics (exact width selects the preceding row).
+  layer.addSameMaskSpacingRow(0, -1, {60, 61, 62, 63});
+  layer.addSameMaskSpacingRow(72, 0, {61, 62, 63, 64});
+  layer.addSameMaskSpacingRow(156, 0, {62, 63, 64, 65});
+  layer.addSameMaskSpacingRow(208, 300, {63, 64, 65, 66});
+  EXPECT_TRUE(layer.validateSameMaskSpacingTable());
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 100, -1), 60);
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 100, 0), 62);
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 100, 1), 62);
+  EXPECT_EQ(layer.getSameMaskSpacing(100, 180, 0), 63);
+  EXPECT_EQ(layer.getSameMaskSpacing(72, 72, 0), 60);
+
+  frLayer duplicate_widths;
+  duplicate_widths.addSameMaskSpacingRow(0, -1, {60, 61, 62, 63});
+  duplicate_widths.addSameMaskSpacingRow(0, 700, {61, 62, 63, 64});
+  duplicate_widths.addSameMaskSpacingRow(0, 2999, {62, 63, 64, 65});
+  duplicate_widths.addSameMaskSpacingRow(72, 0, {63, 64, 65, 66});
+  EXPECT_TRUE(duplicate_widths.validateSameMaskSpacingTable());
+  EXPECT_EQ(duplicate_widths.getSameMaskSpacing(1, 1, 699), 60);
+  EXPECT_EQ(duplicate_widths.getSameMaskSpacing(1, 1, 700), 62);
+  EXPECT_EQ(duplicate_widths.getSameMaskSpacing(1, 1, 2999), 64);
+
+  frLayer unsorted_prl;
+  unsorted_prl.addSameMaskSpacingRow(0, -1, {1, 1, 1});
+  unsorted_prl.addSameMaskSpacingRow(0, 10, {1, 1, 1});
+  unsorted_prl.addSameMaskSpacingRow(0, 5, {1, 1, 1});
+  EXPECT_FALSE(unsorted_prl.validateSameMaskSpacingTable());
+
+  frLayer nonsquare;
+  nonsquare.addSameMaskSpacingRow(0, -1, {1, 2});
+  nonsquare.addSameMaskSpacingRow(1, -1, {1});
+  EXPECT_FALSE(nonsquare.validateSameMaskSpacingTable());
+
+  frLayer unsorted;
+  unsorted.addSameMaskSpacingRow(2, -1, {1, 1});
+  unsorted.addSameMaskSpacingRow(1, -1, {1, 1});
+  EXPECT_FALSE(unsorted.validateSameMaskSpacingTable());
+}
 
 // Fixture for GC tests
 struct GCFixture : public Fixture

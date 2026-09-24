@@ -50,6 +50,9 @@ struct RouterConfiguration
   bool DO_PA = true;
   bool SINGLE_STEP_DR = false;
   bool SAVE_GUIDE_UPDATES = false;
+  // Apply LEF SAMEMASK spacing conservatively between routed shapes only.
+  // Fixed geometry and pin access continue to use the ordinary rules.
+  bool CONSERVATIVE_SAME_MASK_SPACING = false;
 
   std::string VIAINPIN_BOTTOMLAYER_NAME;
   std::string VIAINPIN_TOPLAYER_NAME;
