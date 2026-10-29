@@ -155,6 +155,9 @@ detailed_route_debug
 
 This function checks pin access.
 
+Pin access includes additional via placements on preferred upper-layer tracks,
+using the pin and via enclosure geometry.
+
 ```tcl
 pin_access
     [-db_process_node name]
