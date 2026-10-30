@@ -18,7 +18,7 @@ standalone_python)
     CMD="python3 -u $TEST_NAME.$TEST_EXT"
     ;;
 python)
-    if "$OPENROAD_EXE" -help 2>&1 | grep -q -- "-python"; then
+    if "$OPENROAD_EXE" -help 2>&1 | grep -q -- '^[[:space:]]*-python[[:space:]]'; then
         CMD="$OPENROAD_EXE -python -no_splash -no_init -exit -threads 1 $TEST_NAME.$TEST_EXT"
     else
         CMD="python3 -u $TEST_NAME.$TEST_EXT"
