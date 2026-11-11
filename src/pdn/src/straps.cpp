@@ -2569,9 +2569,8 @@ void MacroEdgeConnectionStraps::cutShapes(
 {
   GridComponent::cutShapes(obstructions);
 
-  // The macro's own metal is published by this grid, so the pass above
-  // ignores it -- but a pin with the body of its own macro in the way cannot
-  // grow out of it, and that is the case this has to stop.
+  // Member metal is ignored by same-grid filtering but must still block
+  // escapes.
   GridComponent::cutShapes(*macro_obstructions_);
 
   // Whatever is left has to be one piece of metal joining the pin to the
@@ -2629,10 +2628,10 @@ void MacroEdgeConnectionStraps::report() const
 
 void MacroEdgeConnectionStraps::connectUnreachedPins(
     InstanceGrid* grid,
+    odb::dbInst* inst,
     const Shape::ShapeTreeMap& global_shapes,
     Shape::ObstructionTreeMap& obstructions)
 {
-  odb::dbInst* inst = grid->getInstance();
   if (!inst->getMaster()->isBlock()) {
     // Only a hard macro has an edge to grow out of.  A pad is served by
     // PadDirectConnectionStraps and a cover cell is reached from above.
@@ -2669,13 +2668,14 @@ void MacroEdgeConnectionStraps::connectUnreachedPins(
           }
         };
 
-  // The macro's own metal, built once for every pin of it.
-  // getPadObstructions attributes the metal coincident with a pin to that
-  // pin's net, so a pin being grown does not block itself.
+  // Same-grid filtering also skips neighboring members, so check their real
+  // metal.
   auto macro_obstructions = std::make_shared<Shape::ObstructionTreeMap>();
-  for (const auto& [layer, shapes] : InstanceGrid::getPadObstructions(inst)) {
-    (*macro_obstructions)[layer]
-        = Shape::ObstructionTree(shapes.begin(), shapes.end());
+  for (auto* member : grid->getInstances()) {
+    for (const auto& [layer, shapes] :
+         InstanceGrid::getPadObstructions(member)) {
+      (*macro_obstructions)[layer].insert(shapes.begin(), shapes.end());
+    }
   }
 
   const odb::Rect die = grid->getBlock()->getDieArea();

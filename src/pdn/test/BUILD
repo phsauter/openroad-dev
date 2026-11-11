@@ -613,3 +613,30 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "pdn_macro_group_unittest",
+    srcs = [
+        "cpp/PdnTest.h",
+        "cpp/TestPDNMacroGroup.cpp",
+        "cpp/stubs.cpp",
+    ],
+    features = ["-layering_check"],
+    deps = [
+        "//:ord",
+        "//src/odb/src/db",
+        "//src/pdn",
+        "//src/tst",
+        "//src/tst:physical_builder",
+        "//src/utl",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+regression_test(
+    name = "macro_group_smoke",
+    data = [":regression_resources"],
+    check_log = False,
+    check_passfail = True,
+)

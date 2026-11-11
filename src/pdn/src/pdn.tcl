@@ -155,6 +155,7 @@ sta::define_cmd_args "define_pdn_grid" {[-name <name>] \
                                         [-macro] \
                                         [-existing] \
                                         [-grid_over_pg_pins|-grid_over_boundary] \
+                                        [-group] \
                                         [-voltage_domains <list_of_voltage_domains>] \
                                         [-orient <list_of_valid_orientations>] \
                                         [-instances <list_of_instances>] \
@@ -1009,7 +1010,7 @@ proc define_pdn_grid_macro { args } {
   sta::parse_key_args "define_pdn_grid" args \
     keys {-name -voltage_domains -orient -instances -cells -halo -pin_direction -starts_with \
       -obstructions} \
-    flags {-macro -grid_over_pg_pins -grid_over_boundary -default -bump} ;# checker off
+    flags {-macro -grid_over_pg_pins -grid_over_boundary -default -bump -group} ;# checker off
 
   sta::check_argc_eq0 "define_pdn_grid" $args
   pdn::check_design_state "define_pdn_grid"
@@ -1138,21 +1139,32 @@ proc define_pdn_grid_macro { args } {
     }
   }
 
-  set created false
+  set grouped [info exists flags(-group)]
+  if { $grouped } {
+    set insts [lsort -unique -command name_cmp $insts]
+  }
+  set selected {}
   foreach inst $insts {
-    # must match orientation, if provided
-    if { [match_orientation $orients [$inst getOrient]] != 0 } {
+    if { (!$grouped || [$inst isFixed]) && [match_orientation $orients [$inst getOrient]] != 0 } {
+      lappend selected $inst
+    }
+  }
+  if { $grouped && $is_bump } {
+    utl::error PDN 1060 "Options -group and -bump are mutually exclusive."
+  }
+
+  set created false
+  if { $grouped && [llength $selected] != 0 } {
+    foreach domain $domains {
+      pdn::make_instance_group_grid $domain $keys(-name) $start_with_power \
+        $selected {*}$halo $pg_pins_to_boundary $default_grid $obstructions $is_bump
+      set created true
+    }
+  } else {
+    foreach inst $selected {
       foreach domain $domains {
-        pdn::make_instance_grid \
-          $domain \
-          $keys(-name) \
-          $start_with_power \
-          $inst \
-          {*}$halo \
-          $pg_pins_to_boundary \
-          $default_grid \
-          $obstructions \
-          $is_bump
+        pdn::make_instance_grid $domain $keys(-name) $start_with_power \
+          $inst {*}$halo $pg_pins_to_boundary $default_grid $obstructions $is_bump
         set created true
       }
     }

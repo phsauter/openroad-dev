@@ -1774,27 +1774,55 @@ InstanceGrid::InstanceGrid(
     bool start_with_power,
     odb::dbInst* inst,
     const std::vector<odb::dbTechLayer*>& generate_obstructions)
-    : Grid(domain, name, start_with_power, generate_obstructions), inst_(inst)
+    : InstanceGrid(domain,
+                   name,
+                   start_with_power,
+                   std::vector<odb::dbInst*>{inst},
+                   generate_obstructions)
 {
-  auto* halo = inst->getHalo();
-  if (halo != nullptr && !halo->isSoft()) {
-    // getTransformedHalo has already mapped the halo onto the placed
-    // instance, so it is assigned rather than passed through addHalo
-    const odb::Rect halo_box = inst->getTransformedHalo();
+}
 
-    halos_
-        = {halo_box.xMin(), halo_box.yMin(), halo_box.xMax(), halo_box.yMax()};
+InstanceGrid::InstanceGrid(
+    VoltageDomain* domain,
+    const std::string& name,
+    bool start_with_power,
+    const std::vector<odb::dbInst*>& insts,
+    const std::vector<odb::dbTechLayer*>& generate_obstructions)
+    : Grid(domain, name, start_with_power, generate_obstructions)
+{
+  for (auto* inst : insts) {
+    Halo halo;
+    if (inst->getHalo() != nullptr && !inst->getHalo()->isSoft()) {
+      const odb::Rect box = inst->getTransformedHalo();
+      halo = {box.xMin(), box.yMin(), box.xMax(), box.yMax()};
+    }
+    insts_.emplace(inst, halo);
   }
+}
+
+odb::PtrSet<odb::dbInst> InstanceGrid::getInstances() const
+{
+  odb::PtrSet<odb::dbInst> insts;
+  for (const auto& [inst, halo] : insts_) {
+    insts.insert(inst);
+  }
+  return insts;
 }
 
 std::string InstanceGrid::getLongName() const
 {
-  return getName() + " - " + inst_->getName();
+  std::string name = getName();
+  for (const auto& [inst, halo] : insts_) {
+    name += " - " + inst->getName();
+  }
+  return name;
 }
 
 void InstanceGrid::addHalo(const Halo& halos)
 {
-  halos_ = halos.transform(getOrientation());
+  for (auto& [inst, halo] : insts_) {
+    halo = halos.transform(inst->getOrient());
+  }
 }
 
 void InstanceGrid::setGridToBoundary(bool value)
@@ -1804,80 +1832,75 @@ void InstanceGrid::setGridToBoundary(bool value)
 
 odb::Rect InstanceGrid::getDomainArea() const
 {
-  auto* bbox = inst_->getBBox();
-  odb::Rect inst_box = bbox->getBox();
-
-  return inst_box;
+  odb::Rect bounds;
+  bounds.mergeInit();
+  for (const auto& [inst, halo] : insts_) {
+    bounds.merge(inst->getBBox()->getBox());
+  }
+  return bounds;
 }
 
 odb::Rect InstanceGrid::getDomainBoundary() const
 {
-  if (grid_to_boundary_) {
-    // use instance boundary
-    return getDomainArea();
-  }
-
-  // find the outline of the supply pins
-  odb::Rect pin_box;
-  pin_box.mergeInit();
-
-  const odb::dbTransform transform = inst_->getTransform();
-
-  for (auto* pin : inst_->getMaster()->getMTerms()) {
-    if (!pin->getSigType().isSupply()) {
-      continue;
-    }
-
-    pin_box.merge(pin->getBBox());
-  }
-
-  transform.apply(pin_box);
-
-  return pin_box;
+  return getDomainBoundaryRegion().getEnclosingRect();
 }
 
 odb::Rect InstanceGrid::getGridArea() const
 {
-  return applyHalo(getDomainArea(), false, true, true);
+  return getGridRegion().getEnclosingRect();
 }
 
 Region InstanceGrid::getDomainRegion() const
 {
-  // The real outline of the macro rather than its placement bounding box.  For
-  // a rectangular macro -- which is any macro that does not declare an
-  // OVERLAP-layer obstruction -- these are the same thing.
-  return getInstanceOutline(inst_);
+  Region outline;
+  for (const auto& [inst, halo] : insts_) {
+    outline = outline.unite(getInstanceOutline(inst));
+  }
+  // Separate members need one enclosing perimeter rather than individual rings.
+  if (insts_.size() > 1 && outline.getPolygons().size() > 1) {
+    return Region(outline.getEnclosingRect());
+  }
+  return outline;
 }
 
 Region InstanceGrid::getGridRegion() const
 {
-  return getDomainRegion().bloat(
-      {halos_.left, halos_.bottom, halos_.right, halos_.top});
+  Region outline;
+  for (const auto& [inst, halo] : insts_) {
+    outline = outline.unite(getInstanceOutline(inst).bloat(
+        {halo.left, halo.bottom, halo.right, halo.top}));
+  }
+  return outline;
 }
 
 Region InstanceGrid::getDomainBoundaryRegion() const
 {
-  // Take away the part of the bounding box that is not the macro, and nothing
-  // else.  Intersecting with the outline instead would also cut off the
-  // overhang the boundary legitimately has: the supply rails of a standard
-  // cell run half a width past the cell on each side, and a grid defined over
-  // those pins is meant to reach them.
-  const Region notch = Region(getDomainArea()).subtract(getDomainRegion());
-
-  return Region(getDomainBoundary()).subtract(notch);
+  if (grid_to_boundary_) {
+    return getDomainRegion();
+  }
+  Region boundary;
+  for (const auto& [inst, halo] : insts_) {
+    odb::Rect pin_box;
+    pin_box.mergeInit();
+    for (auto* pin : inst->getMaster()->getMTerms()) {
+      if (pin->getSigType().isSupply()) {
+        pin_box.merge(pin->getBBox());
+      }
+    }
+    if (pin_box.isInverted()) {
+      continue;
+    }
+    inst->getTransform().apply(pin_box);
+    const Region notch
+        = Region(inst->getBBox()->getBox()).subtract(getInstanceOutline(inst));
+    boundary = boundary.unite(Region(pin_box).subtract(notch));
+  }
+  return boundary;
 }
 
 Region InstanceGrid::getGridBoundaryRegion() const
 {
   return getDomainBoundaryRegion();
-}
-
-odb::Rect InstanceGrid::applyHalo(const odb::Rect& rect,
-                                  bool rect_is_min,
-                                  bool apply_horizontal,
-                                  bool apply_vertical) const
-{
-  return applyHalo(rect, halos_, rect_is_min, apply_horizontal, apply_vertical);
 }
 
 odb::Rect InstanceGrid::applyHalo(const odb::Rect& rect,
@@ -2072,7 +2095,36 @@ ShapeVectorMap InstanceGrid::getInstanceObstructions(
 void InstanceGrid::getGridLevelObstructions(ShapeVectorMap& obstructions) const
 {
   ShapeVectorMap local_obs;
-  Grid::getGridLevelObstructions(local_obs);
+  if (insts_.size() == 1) {
+    Grid::getGridLevelObstructions(local_obs);
+  } else {
+    for (const auto& strap : getStraps()) {
+      local_obs.try_emplace(strap->getLayer());
+    }
+    for (const auto& connect : getConnect()) {
+      for (auto* layer : connect->getIntermediteRoutingLayers()) {
+        local_obs.try_emplace(layer);
+      }
+    }
+    for (const auto& ring : getRings()) {
+      int horizontal, vertical;
+      ring->getTotalWidth(horizontal, vertical);
+      const auto& offset = ring->getOffset();
+      const Region inner = getDomainRegion().bloat(
+          {offset.left, offset.bottom, offset.right, offset.top});
+      // Only the ring band is claimed across gaps between group members.
+      const Region band
+          = inner.bloat({vertical, horizontal, vertical, horizontal})
+                .subtract(inner);
+      for (auto* layer : ring->getLayers()) {
+        for (const auto& rect : band.getRects()) {
+          auto obs = std::make_shared<GridObsShape>(layer, rect, this);
+          obs->generateObstruction();
+          local_obs[layer].push_back(std::move(obs));
+        }
+      }
+    }
+  }
 
   // The outline of the macro plus its halo, not the bounding box: the notch of
   // an L-shaped macro is ordinary core area and the core grid is entitled to
@@ -2088,10 +2140,13 @@ void InstanceGrid::getGridLevelObstructions(ShapeVectorMap& obstructions) const
   }
 
   // copy instance obstructions
-  for (const auto& [layer, shapes] : getInstanceObstructions(inst_, halos_)) {
-    for (const auto& shape : shapes) {
-      auto obs = std::make_shared<GridObsShape>(layer, shape->getRect(), this);
-      local_obs[layer].push_back(obs);
+  for (const auto& [inst, halo] : insts_) {
+    for (const auto& [layer, shapes] : getInstanceObstructions(inst, halo)) {
+      for (const auto& shape : shapes) {
+        auto obs
+            = std::make_shared<GridObsShape>(layer, shape->getRect(), this);
+        local_obs[layer].push_back(obs);
+      }
     }
   }
 
@@ -2153,11 +2208,13 @@ void InstanceGrid::getIntersections(std::vector<ViaPtr>& vias,
   // add instance pins
   Shape::ShapeTreeMap inst_shapes = shapes;
   for (auto* net : getNets(false)) {
-    for (const auto& [layer, shapes_on_layer] : getInstancePins(inst_)) {
-      auto& layer_shapes = inst_shapes[layer];
-      for (const auto& shape : shapes_on_layer) {
-        if (shape->getNet() == net) {
-          layer_shapes.insert(shape);
+    for (const auto& [inst, halo] : insts_) {
+      for (const auto& [layer, shapes_on_layer] : getInstancePins(inst)) {
+        auto& layer_shapes = inst_shapes[layer];
+        for (const auto& shape : shapes_on_layer) {
+          if (shape->getNet() == net) {
+            layer_shapes.insert(shape);
+          }
         }
       }
     }
@@ -2170,8 +2227,10 @@ void InstanceGrid::connectUnreachedPins(
     const Shape::ShapeTreeMap& global_shapes,
     Shape::ObstructionTreeMap& obstructions)
 {
-  MacroEdgeConnectionStraps::connectUnreachedPins(
-      this, global_shapes, obstructions);
+  for (const auto& [inst, halo] : insts_) {
+    MacroEdgeConnectionStraps::connectUnreachedPins(
+        this, inst, global_shapes, obstructions);
+  }
 }
 
 std::vector<odb::dbNet*> InstanceGrid::getNets(bool starts_with_power) const
@@ -2179,10 +2238,12 @@ std::vector<odb::dbNet*> InstanceGrid::getNets(bool starts_with_power) const
   auto nets = Grid::getNets(starts_with_power);
 
   odb::PtrSet<odb::dbNet> connected_nets;
-  for (auto* iterm : inst_->getITerms()) {
-    auto* net = iterm->getNet();
-    if (net != nullptr) {
-      connected_nets.insert(net);
+  for (const auto& [inst, halo] : insts_) {
+    for (auto* iterm : inst->getITerms()) {
+      auto* net = iterm->getNet();
+      if (net != nullptr) {
+        connected_nets.insert(net);
+      }
     }
   }
 
@@ -2205,38 +2266,43 @@ void InstanceGrid::report() const
   auto* logger = getLogger();
 
   const double units = getDomain()->getBlock()->getDbUnitsPerMicron();
-  logger->report("Halo:");
-  logger->report("  Left: {:.4f}", halos_.left / units);
-  logger->report("  Bottom: {:.4f}", halos_.bottom / units);
-  logger->report("  Right: {:.4f}", halos_.right / units);
-  logger->report("  Top: {:.4f}", halos_.top / units);
+  for (const auto& [inst, halo] : insts_) {
+    if (insts_.size() > 1) {
+      logger->report("Instance: {}", inst->getName());
+    }
+    logger->report("Halo:");
+    logger->report("  Left: {:.4f}", halo.left / units);
+    logger->report("  Bottom: {:.4f}", halo.bottom / units);
+    logger->report("  Right: {:.4f}", halo.right / units);
+    logger->report("  Top: {:.4f}", halo.top / units);
+  }
 }
 
 bool InstanceGrid::isValid() const
 {
   if (getNets(startsWithPower()).empty()) {
-    if (!inst_->getITerms().empty()) {
+    if (std::ranges::any_of(insts_, [](const auto& member) {
+          return !member.first->getITerms().empty();
+        })) {
       // only warn when instance has something that could be connected to
-      getLogger()->warn(utl::PDN,
-                        231,
-                        "{} is not connected to any power/ground nets.",
-                        inst_->getName());
+      getLogger()->warn(
+          utl::PDN,
+          231,
+          "{} is not connected to any power/ground nets.",
+          getInstance() == nullptr ? getLongName() : getInstance()->getName());
     }
     return false;
   }
   return true;
 }
 
-bool InstanceGrid::hasHalo() const
-{
-  return !halos_.isZero();
-}
-
 InstanceGrid::Halo InstanceGrid::suggestHalo(
+    odb::dbInst* inst,
+    const Halo& halo,
     const std::vector<odb::Rect>& rows) const
 {
-  const odb::Rect inst_box = inst_->getBBox()->getBox();
-  const odb::Rect inst_halo = applyHalo(inst_box, halos_, true, true, true);
+  const odb::Rect inst_box = inst->getBBox()->getBox();
+  const odb::Rect inst_halo = applyHalo(inst_box, halo, true, true, true);
 
   // Whether a row shares the instance's horizontal/vertical extent.  A row
   // that does not overlap the instance shares at most one of the two, so it
@@ -2248,7 +2314,7 @@ InstanceGrid::Halo InstanceGrid::suggestHalo(
     return row.yMax() > inst_box.yMin() && row.yMin() < inst_box.yMax();
   };
 
-  Halo suggested = halos_;
+  Halo suggested = halo;
 
   // First pass: rows beside the instance (sharing its vertical extent) can
   // only be cleared horizontally; rows above/below it (sharing its horizontal
@@ -2299,9 +2365,9 @@ InstanceGrid::Halo InstanceGrid::suggestHalo(
   return suggested;
 }
 
-void InstanceGrid::checkHalo() const
+void InstanceGrid::checkHalo(odb::dbInst* inst, const Halo& halo) const
 {
-  if (!hasHalo() || inst_->getMaster()->isCover()) {
+  if (halo.isZero() || inst->getMaster()->isCover()) {
     return;
   }
 
@@ -2309,8 +2375,9 @@ void InstanceGrid::checkHalo() const
   // non-rectangular macro the bounding box covers the notch, so measuring
   // against it flags the rows alongside the notch -- which the macro is
   // nowhere near -- and demands a halo of zero to clear rows it never touches.
-  const Region outline = getDomainRegion();
-  const Region halo_region = getGridRegion();
+  const Region outline = getInstanceOutline(inst);
+  const Region halo_region
+      = outline.bloat({halo.left, halo.bottom, halo.right, halo.top});
 
   const auto touches = [](const Region& region, const odb::Rect& box) {
     return !Region(box).intersect(region).isEmpty();
@@ -2338,8 +2405,8 @@ void InstanceGrid::checkHalo() const
 
   // suggestHalo works in the placed frame; report the suggestion in the
   // master's frame so the user can type it back into -halo unchanged
-  const Halo suggested
-      = suggestHalo(overlapping_rows).untransform(getOrientation());
+  const Halo suggested = suggestHalo(inst, halo, overlapping_rows)
+                             .untransform(inst->getOrient());
 
   const double dbus = getBlock()->getDbUnitsPerMicron();
   getLogger()->error(
@@ -2347,7 +2414,7 @@ void InstanceGrid::checkHalo() const
       8,
       "{} halo overlaps row {} (and {} other row(s)); reduce the halo to at "
       "most \"{:.4f} {:.4f} {:.4f} {:.4f}\".",
-      getLongName(),
+      getName() + " - " + inst->getName(),
       first_row,
       overlapping_rows.size() - 1,
       suggested.left / dbus,
@@ -2359,12 +2426,18 @@ void InstanceGrid::checkHalo() const
 void InstanceGrid::checkSetup() const
 {
   Grid::checkSetup();
+  for (const auto& [inst, halo] : insts_) {
+    checkInstanceSetup(inst, halo);
+  }
+}
 
-  checkHalo();
+void InstanceGrid::checkInstanceSetup(odb::dbInst* inst, const Halo& halo) const
+{
+  checkHalo(inst, halo);
 
   // check blockages above pins
   const auto nets = getNets(startsWithPower());
-  for (auto* iterm : inst_->getITerms()) {
+  for (auto* iterm : inst->getITerms()) {
     if (std::ranges::find(nets, iterm->getNet()) == nets.end()) {
       continue;
     }
@@ -2391,7 +2464,7 @@ void InstanceGrid::checkSetup() const
       const int top_idx = top->getNumber();
       std::map<odb::Rect, int64_t> overlap_area;
       odb::PtrSet<odb::dbTechLayer> layers;
-      for (auto* master_obs : inst_->getMaster()->getObstructions()) {
+      for (auto* master_obs : inst->getMaster()->getObstructions()) {
         auto* obs_layer = master_obs->getTechLayer();
         if (obs_layer == nullptr) {
           continue;
@@ -2437,7 +2510,7 @@ void InstanceGrid::checkSetup() const
                 iterm->getMTerm()->getName(),
                 top->getName(),
                 layer_txt,
-                inst_->getName());
+                inst->getName());
           }
         }
 
@@ -2456,7 +2529,7 @@ void InstanceGrid::checkSetup() const
                           top->getName(),
                           pct,
                           layer_txt,
-                          inst_->getName());
+                          inst->getName());
       }
     }
   }

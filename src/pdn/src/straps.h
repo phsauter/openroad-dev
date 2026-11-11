@@ -339,6 +339,7 @@ class MacroEdgeConnectionStraps : public Straps
   // shape it has a connect rule to, and rebuild the vias if anything was
   // added.
   static void connectUnreachedPins(InstanceGrid* grid,
+                                   odb::dbInst* inst,
                                    const Shape::ShapeTreeMap& global_shapes,
                                    Shape::ObstructionTreeMap& obstructions);
 
@@ -348,7 +349,7 @@ class MacroEdgeConnectionStraps : public Straps
   // the end of the pin the strap leaves by: one of NORTH, SOUTH, EAST or WEST
   odb::Direction2D direction_;
   ShapePtr target_;
-  // the macro's own metal, shared by every strap grown out of it
+  // member metal, shared by every strap grown out of one source macro
   std::shared_ptr<const Shape::ObstructionTreeMap> macro_obstructions_;
 
   std::string getName() const;

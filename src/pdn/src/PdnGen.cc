@@ -508,7 +508,7 @@ Grid* PdnGen::instanceGrid(odb::dbInst* inst) const
   for (auto* check_grid : getGrids()) {
     auto* other_grid = dynamic_cast<InstanceGrid*>(check_grid);
     if (other_grid != nullptr) {
-      if (other_grid->getInstance() == inst) {
+      if (other_grid->getInstances().contains(inst)) {
         return check_grid;
       }
     }
@@ -547,41 +547,77 @@ void PdnGen::makeInstanceGrid(
     const std::vector<odb::dbTechLayer*>& generate_obstructions,
     bool is_bump)
 {
-  auto* check_grid = instanceGrid(inst);
-  if (check_grid != nullptr) {
-    if (check_grid->isReplaceable()) {
-      // remove the old grid and replace with this one
-      debugPrint(logger_,
-                 utl::PDN,
-                 "Setup",
-                 1,
-                 "Replacing {} with {} for instance: {}",
-                 check_grid->getName(),
-                 name,
-                 inst->getName());
-      auto* check_domain = check_grid->getDomain();
-      check_domain->removeGrid(check_grid);
-    } else if (default_grid) {
-      // this is a default grid so we can ignore this assignment
+  makeInstanceGrid(domain,
+                   name,
+                   starts_with,
+                   std::vector<odb::dbInst*>{inst},
+                   halo,
+                   pg_pins_to_boundary,
+                   default_grid,
+                   generate_obstructions,
+                   is_bump);
+}
+
+void PdnGen::makeInstanceGrid(
+    VoltageDomain* domain,
+    const std::string& name,
+    StartsWith starts_with,
+    const std::vector<odb::dbInst*>& insts,
+    const std::array<int, 4>& halo,
+    bool pg_pins_to_boundary,
+    bool default_grid,
+    const std::vector<odb::dbTechLayer*>& generate_obstructions,
+    bool is_bump)
+{
+  if (insts.empty()) {
+    makeDummyInstanceGrid(domain, name);
+    return;
+  }
+  if (is_bump && insts.size() != 1) {
+    logger_->error(utl::PDN, 243, "A bump grid must contain one instance.");
+  }
+  std::set<Grid*> replaced;
+  for (auto* inst : insts) {
+    auto* check_grid = instanceGrid(inst);
+    if (check_grid == nullptr) {
+      continue;
+    }
+    if (!check_grid->isReplaceable()) {
+      if (!default_grid) {
+        logger_->warn(utl::PDN,
+                      182,
+                      "Instance {} already belongs to another grid \"{}\" and "
+                      "therefore cannot belong to \"{}\".",
+                      inst->getName(),
+                      check_grid->getName(),
+                      name);
+      }
       return;
-    } else {
-      logger_->warn(utl::PDN,
-                    182,
-                    "Instance {} already belongs to another grid \"{}\" and "
-                    "therefore cannot belong to \"{}\".",
-                    inst->getName(),
-                    check_grid->getName(),
-                    name);
-      return;
+    }
+    replaced.insert(check_grid);
+  }
+
+  for (const auto* incumbent : replaced) {
+    for (auto* member : incumbent->getInstances()) {
+      if (std::ranges::find(insts, member) == insts.end()) {
+        logger_->warn(utl::PDN,
+                      244,
+                      "Grid \"{}\" cannot replace part of default grid \"{}\"; "
+                      "include all its instances, including {}.",
+                      name,
+                      incumbent->getName(),
+                      member->getName());
+        return;
+      }
     }
   }
 
   std::unique_ptr<InstanceGrid> grid = nullptr;
   if (is_bump) {
-    grid = std::make_unique<BumpGrid>(domain, name, inst);
+    grid = std::make_unique<BumpGrid>(domain, name, insts.front());
   } else {
     grid = std::make_unique<InstanceGrid>(
-        domain, name, starts_with == kPower, inst, generate_obstructions);
+        domain, name, starts_with == kPower, insts, generate_obstructions);
   }
   const EdgeSpec halo_spec = EdgeSpec::fromArray(halo);
   if (!halo_spec.isZero()) {
@@ -595,6 +631,10 @@ void PdnGen::makeInstanceGrid(
     return;
   }
 
+  // Validate every member before removing any default ownership.
+  for (auto* incumbent : replaced) {
+    incumbent->getDomain()->removeGrid(incumbent);
+  }
   domain->addGrid(std::move(grid));
 }
 

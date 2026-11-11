@@ -327,29 +327,39 @@ class InstanceGrid : public Grid
                odb::dbInst* inst,
                const std::vector<odb::dbTechLayer*>& generate_obstructions);
 
+  InstanceGrid(VoltageDomain* domain,
+               const std::string& name,
+               bool start_with_power,
+               const std::vector<odb::dbInst*>& insts,
+               const std::vector<odb::dbTechLayer*>& generate_obstructions);
+
   std::string getLongName() const override;
 
   void report() const override;
   void reportHeader() const override;
   Type type() const override { return Grid::kInstance; }
 
-  odb::dbInst* getInstance() const { return inst_; }
-  odb::PtrSet<odb::dbInst> getInstances() const override { return {inst_}; }
+  odb::dbInst* getInstance() const
+  {
+    return insts_.size() == 1 ? insts_.begin()->first : nullptr;
+  }
+  odb::PtrSet<odb::dbInst> getInstances() const override;
   odb::PtrSet<odb::dbInst> getObstructionExemptInstances() const override
   {
-    return {inst_};
+    return getInstances();
   }
 
   odb::dbOrientType getOrientation() const override
   {
-    return inst_->getOrient();
+    return insts_.size() == 1 ? getInstance()->getOrient()
+                              : odb::dbOrientType(odb::dbOrientType::R0);
   }
 
   std::vector<odb::dbNet*> getNets(bool starts_with_power) const override;
 
   using Halo = EdgeSpec;
   // halos are given in the master's as-drawn frame and are remapped onto the
-  // placed instance; halos_ is always in the placed frame.
+  // placed instance; each stored halo is in the placed frame.
   void addHalo(const Halo& halos);
   void setGridToBoundary(bool value);
 
@@ -390,24 +400,21 @@ class InstanceGrid : public Grid
                             Shape::ObstructionTreeMap& obstructions) override;
 
  private:
-  odb::dbInst* inst_;
-  Halo halos_ = {0, 0, 0, 0};
+  odb::PtrMap<odb::dbInst, Halo> insts_;
   bool grid_to_boundary_ = false;
 
   bool replaceable_ = false;
 
-  odb::Rect applyHalo(const odb::Rect& rect,
-                      bool rect_is_min,
-                      bool apply_horizontal,
-                      bool apply_vertical) const;
   static odb::Rect applyHalo(const odb::Rect& rect,
                              const Halo& halo,
                              bool rect_is_min,
                              bool apply_horizontal,
                              bool apply_vertical);
-  bool hasHalo() const;
-  void checkHalo() const;
-  Halo suggestHalo(const std::vector<odb::Rect>& rows) const;
+  void checkInstanceSetup(odb::dbInst* inst, const Halo& halo) const;
+  void checkHalo(odb::dbInst* inst, const Halo& halo) const;
+  Halo suggestHalo(odb::dbInst* inst,
+                   const Halo& halo,
+                   const std::vector<odb::Rect>& rows) const;
 };
 
 class DummyInstanceGrid : public Grid
