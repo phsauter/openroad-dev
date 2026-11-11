@@ -1595,12 +1595,16 @@ TEST_F(TestConnect, WriteToDbExtendsAShapeAlongItsLayer)
           lower,
           upper);
 
-  via.writeToDb(wire, block(), {});
+  const auto emitted = via.writeToDb(wire, block(), {});
   EXPECT_FALSE(via.isFailed());
   EXPECT_EQ(lower->getRect(), odb::Rect(0, 1000, 2060, 1200));
   EXPECT_EQ(upper->getRect(), kM2Strap);
   const std::vector<odb::dbSBox*> vias = placedVias(wire);
   ASSERT_EQ(vias.size(), 1u);
+  ASSERT_EQ(emitted.size(), wire->getWires().size());
+  for (auto* box : wire->getWires()) {
+    EXPECT_TRUE(emitted.contains(box));
+  }
   EXPECT_EQ(vias[0]->getWireShapeType(), odb::dbWireShapeType::STRIPE);
   expectDefaultEnclosures(wire);
 }
@@ -1624,7 +1628,7 @@ TEST_F(TestConnect, WriteToDbRipsUpAViaThatReachesAnObstruction)
   obstructions[m(1)].insert(std::make_shared<Shape>(
       m(1), odb::Rect(2055, 1000, 2100, 1200), Shape::kObs));
 
-  via.writeToDb(wire, block(), obstructions);
+  EXPECT_TRUE(via.writeToDb(wire, block(), obstructions).empty());
   EXPECT_TRUE(via.isFailed());
   EXPECT_TRUE(wire->getWires().empty());
   EXPECT_EQ(lower->getRect(), odb::Rect(0, 1000, 2050, 1200));

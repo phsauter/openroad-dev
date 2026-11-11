@@ -770,9 +770,10 @@ class Via
 
   Connect* getConnect() const { return connect_; }
 
-  void writeToDb(odb::dbSWire* wire,
-                 odb::dbBlock* block,
-                 const Shape::ObstructionTreeMap& obstructions);
+  odb::PtrSet<odb::dbSBox> writeToDb(
+      odb::dbSWire* wire,
+      odb::dbBlock* block,
+      const Shape::ObstructionTreeMap& obstructions);
 
   Grid* getGrid() const;
 
