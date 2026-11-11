@@ -171,6 +171,14 @@ class PadDirectConnectionStraps : public Straps
   bool refineShapes(Shape::ShapeTreeMap& all_shapes,
                     Shape::ObstructionTreeMap& all_obstructions) override;
 
+  void removeShape(Shape* shape) override;
+  void replaceShape(Shape* shape, std::unique_ptr<Shape> replacement) override;
+  void replaceShape(Shape* shape,
+                    std::vector<std::unique_ptr<Shape>>& replacements) override;
+  void clearShapes() override;
+  bool removeFailedPadHops();
+  bool isPadHop(const Shape* first, const Shape* second) const;
+
   void report() const override;
   Type type() const override { return GridComponent::kPadConnect; }
 
@@ -204,6 +212,14 @@ class PadDirectConnectionStraps : public Straps
   std::optional<odb::dbWireShapeType> target_shapes_type_;
   std::map<Shape*, Shape*> target_shapes_;
   std::map<Shape*, odb::Rect> target_pin_shape_;
+  struct PadHop
+  {
+    ShapePtr escape;
+    ShapePtr route;
+    ShapePtr target;
+  };
+  std::vector<PadHop> pad_hops_;
+  ShapePtr getPadHopTarget(const PadHop& hop) const;
   odb::dbDirection pad_edge_;
   ConnectionType type_ = ConnectionType::kNone;
   std::vector<odb::dbTechLayer*> layers_;
@@ -234,6 +250,9 @@ class PadDirectConnectionStraps : public Straps
       const;
 
   void makeShapesFacingCore(const Shape::ShapeTreeMap& other_shapes);
+  void makePadHop(odb::dbTechLayer* layer,
+                  const odb::Rect& pin,
+                  const Shape::ShapeTreeMap& other_shapes);
 
   // the connections on a pad are built together so that they can be placed
   // with knowledge of each other and balanced across the nets

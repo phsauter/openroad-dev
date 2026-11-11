@@ -613,3 +613,24 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "pdn_pad_hop_unittest",
+    srcs = [
+        "cpp/PdnTest.h",
+        "cpp/TestPDNPadHop.cpp",
+        "cpp/stubs.cpp",
+    ],
+    # PDN component headers are internal.
+    features = ["-layering_check"],
+    deps = [
+        "//:ord",
+        "//src/odb/src/db",
+        "//src/pdn",
+        "//src/tst",
+        "//src/tst:physical_builder",
+        "//src/utl",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)

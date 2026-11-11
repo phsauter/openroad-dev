@@ -440,6 +440,16 @@ bool Grid::repairVias(const Shape::ShapeTreeMap& global_shapes,
       continue;
     }
 
+    // A pad hop already encloses its landing; extending to the whole route
+    // defeats the escape.
+    if (lower_shape->getGridComponent() == upper_shape->getGridComponent()
+        && lower_shape->getGridComponent()->type() == GridComponent::kPadConnect
+        && static_cast<PadDirectConnectionStraps*>(
+               lower_shape->getGridComponent())
+               ->isPadHop(lower_shape.get(), upper_shape.get())) {
+      continue;
+    }
+
     if (lower_belongs_to_grid && lower_shape->isModifiable()) {
       Shape* extend_test = lower_shape.get();
       auto find_replace = replace_shapes.find(extend_test);
@@ -1274,6 +1284,7 @@ std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
   // write vias first do shapes can be adjusted if needed
   std::vector<ViaPtr> vias;
   getVias(vias);
+  std::erase_if(vias, [](const ViaPtr& via) { return !via->isValid(); });
   // sort the vias so they are written to db in the same order
   std::ranges::sort(vias, [](const auto& l, const auto& r) {
     auto* l_low_layer = l->getLowerLayer();
@@ -1291,14 +1302,30 @@ std::map<Shape*, std::vector<odb::dbBox*>> Grid::writeToDb(
     return std::tie(l_low_level, l_high_level, l_area)
            < std::tie(r_low_level, r_high_level, r_area);
   });
+  ViaShapeMap emitted_shapes;
   for (const auto& via : vias) {
+    if (!via->isValid()) {
+      continue;
+    }
     auto net = net_map.find(via->getNet());
     if (net == net_map.end()) {
       continue;
     }
-    auto boxes = via->writeToDb(net->second, getBlock(), obstructions);
-    if (via_shapes != nullptr && via->isValid() && !via->isFailed()) {
-      (*via_shapes)[via.get()] = std::move(boxes);
+    emitted_shapes[via.get()]
+        = via->writeToDb(net->second, getBlock(), obstructions);
+  }
+  for (auto* component : getGridComponents()) {
+    if (component->type() == GridComponent::kPadConnect) {
+      static_cast<PadDirectConnectionStraps*>(component)->removeFailedPadHops();
+    }
+  }
+  for (auto& [via, boxes] : emitted_shapes) {
+    if (!via->isValid()) {
+      for (auto* box : boxes) {
+        odb::dbSBox::destroy(box);
+      }
+    } else if (via_shapes != nullptr && !via->isFailed()) {
+      (*via_shapes)[via] = std::move(boxes);
     }
   }
   for (const auto& connect : connect_) {

@@ -33,6 +33,7 @@
 #include "shape.h"
 #include "techlayer.h"
 #include "utl/Logger.h"
+#include "via.h"
 
 namespace pdn {
 
@@ -1200,6 +1201,7 @@ void PadDirectConnectionStraps::makeShapes(
              getName());
   target_shapes_.clear();
   target_pin_shape_.clear();
+  pad_hops_.clear();
   switch (type_) {
     case ConnectionType::kNone:
       break;
@@ -1325,19 +1327,21 @@ void PadDirectConnectionStraps::makeShapesFacingCore(
   const bool is_horizontal_strap = isConnectHorizontal();
 
   auto* net = iterm_->getNet();
+  std::vector<std::pair<odb::dbTechLayer*, odb::Rect>> hops;
   for (auto* pin : pins_) {
     odb::Rect pin_rect = pin->getBox();
     transform.apply(pin_rect);
 
     auto* layer = pin->getTechLayer();
     if (pin_layers.find(layer) == pin_layers.end()) {
-      // layer is not connectable to a target
+      hops.emplace_back(layer, pin_rect);
       continue;
     }
 
     const auto& connect_layers = connectable_layers[layer];
 
     // find nearest target
+    bool connected = false;
     for (const auto& [search_layer, search_shape_tree] : other_shapes) {
       if (layer == search_layer) {
         continue;
@@ -1397,6 +1401,118 @@ void PadDirectConnectionStraps::makeShapesFacingCore(
       }
 
       target_shapes_[added.get()] = closest_shape.get();
+      connected = true;
+    }
+    if (!connected) {
+      hops.emplace_back(layer, pin_rect);
+    }
+  }
+  for (const auto& [layer, pin] : hops) {
+    makePadHop(layer, pin, other_shapes);
+  }
+}
+
+void PadDirectConnectionStraps::makePadHop(
+    odb::dbTechLayer* layer,
+    const odb::Rect& pin,
+    const Shape::ShapeTreeMap& other_shapes)
+{
+  const bool horizontal = isConnectHorizontal();
+  const auto direction = horizontal ? odb::dbTechLayerDir::HORIZONTAL
+                                    : odb::dbTechLayerDir::VERTICAL;
+  const odb::Rect inst = iterm_->getInst()->getBBox()->getBox();
+  for (auto* route_layer : getGrid()->connectableLayers(layer)) {
+    if (route_layer->getDirection() != direction) {
+      continue;
+    }
+    int width = horizontal ? pin.dy() : pin.dx();
+    for (auto* metal : {layer, route_layer}) {
+      if (metal->hasMaxWidth()) {
+        width = std::min(width, static_cast<int>(metal->getMaxWidth()));
+      }
+    }
+    const int landing
+        = std::max(layer->getMinWidth(), route_layer->getMinWidth());
+    if (width < landing) {
+      continue;
+    }
+    odb::Rect route_pin = pin;
+    if (horizontal) {
+      route_pin.set_yhi(pin.yMin() + width);
+      const int edge
+          = pad_edge_ == odb::dbDirection::WEST ? inst.xMax() : inst.xMin();
+      route_pin.set_xlo(pad_edge_ == odb::dbDirection::WEST ? edge
+                                                            : edge - landing);
+      route_pin.set_xhi(pad_edge_ == odb::dbDirection::WEST ? edge + landing
+                                                            : edge);
+    } else {
+      route_pin.set_xhi(pin.xMin() + width);
+      const int edge
+          = pad_edge_ == odb::dbDirection::SOUTH ? inst.yMax() : inst.yMin();
+      route_pin.set_ylo(pad_edge_ == odb::dbDirection::SOUTH ? edge
+                                                             : edge - landing);
+      route_pin.set_yhi(pad_edge_ == odb::dbDirection::SOUTH ? edge + landing
+                                                             : edge);
+    }
+    auto targets = getGrid()->connectableLayers(route_layer);
+    targets.insert(route_layer);
+    for (auto* target_layer : targets) {
+      const auto shapes = other_shapes.find(target_layer);
+      if (shapes == other_shapes.end()) {
+        continue;
+      }
+      Shape::ShapeTree eligible;
+      for (const auto& target : shapes->second) {
+        if (!inst.intersects(target->getRect())) {
+          eligible.insert(target);
+        }
+      }
+      const auto target
+          = getClosestShape(eligible, route_pin, iterm_->getNet());
+      odb::Rect route_rect;
+      if (target == nullptr
+          || !snapRectToClosestShape(target, route_pin, route_rect)
+          || !route_rect.contains(route_pin)) {
+        continue;
+      }
+      odb::Rect escape_rect = pin;
+      if (horizontal) {
+        escape_rect.set_yhi(pin.yMin() + width);
+      } else {
+        escape_rect.set_xhi(pin.xMin() + width);
+      }
+      escape_rect.merge(route_pin);
+      // Keep each hop independent so a merge cannot hide either endpoint.
+      bool intersects = false;
+      for (const auto& [metal, rect] : {std::pair{layer, escape_rect},
+                                        std::pair{route_layer, route_rect}}) {
+        const auto own = getShapes().find(metal);
+        intersects |= own != getShapes().end()
+                      && own->second.qbegin(bgi::intersects(rect))
+                             != own->second.qend();
+      }
+      if (intersects) {
+        continue;
+      }
+      auto escape_shape = std::make_unique<Shape>(
+          layer, iterm_->getNet(), escape_rect, odb::dbWireShapeType::STRIPE);
+      escape_shape->addITermConnection(pin.intersect(escape_rect));
+      const auto escape = addShape(std::move(escape_shape));
+      const auto route
+          = addShape(std::make_unique<Shape>(route_layer,
+                                             iterm_->getNet(),
+                                             route_rect,
+                                             odb::dbWireShapeType::STRIPE));
+      if (escape != nullptr && route != nullptr) {
+        pad_hops_.push_back({escape, route, target});
+        return;
+      }
+      if (escape != nullptr) {
+        removeShape(escape.get());
+      }
+      if (route != nullptr) {
+        removeShape(route.get());
+      }
     }
   }
 }
@@ -1936,7 +2052,7 @@ void PadDirectConnectionStraps::cutShapes(
       }
     };
 
-    std::map<Shape*, std::vector<std::unique_ptr<Shape>>> replacement_shapes;
+    std::map<ShapePtr, std::vector<std::unique_ptr<Shape>>> replacement_shapes;
     for (const auto& [layer, layer_shapes] : getShapes()) {
       auto it = obstructions.find(layer);
       if (it == obstructions.end()) {
@@ -1946,12 +2062,15 @@ void PadDirectConnectionStraps::cutShapes(
       for (const auto& shape : layer_shapes) {
         std::vector<std::unique_ptr<Shape>> replacements;
         if (shape->cut(obs, replacements, obs_filter)) {
-          replacement_shapes[shape.get()] = std::move(replacements);
+          replacement_shapes[shape] = std::move(replacements);
         }
       }
     }
     for (auto& [shape, replacements] : replacement_shapes) {
-      replaceShape(shape, replacements);
+      const auto& live = getShapes().at(shape->getLayer());
+      if (std::ranges::find(live, shape) != live.end()) {
+        replaceShape(shape.get(), replacements);
+      }
     }
     return;
   }
@@ -1981,6 +2100,163 @@ void PadDirectConnectionStraps::cutShapes(
   for (auto* shape : remove_shapes) {
     removeShape(shape);
   }
+}
+
+void PadDirectConnectionStraps::clearShapes()
+{
+  pad_hops_.clear();
+  target_shapes_.clear();
+  target_pin_shape_.clear();
+  GridComponent::clearShapes();
+}
+
+void PadDirectConnectionStraps::removeShape(Shape* shape)
+{
+  for (auto it = pad_hops_.begin(); it != pad_hops_.end(); ++it) {
+    if (it->escape.get() == shape || it->route.get() == shape) {
+      const PadHop hop = *it;
+      pad_hops_.erase(it);
+      GridComponent::removeShape(hop.escape.get());
+      GridComponent::removeShape(hop.route.get());
+      return;
+    }
+  }
+  GridComponent::removeShape(shape);
+}
+
+void PadDirectConnectionStraps::replaceShape(Shape* shape,
+                                             std::unique_ptr<Shape> replacement)
+{
+  std::vector<std::unique_ptr<Shape>> replacements;
+  replacements.push_back(std::move(replacement));
+  replaceShape(shape, replacements);
+}
+
+void PadDirectConnectionStraps::replaceShape(
+    Shape* shape,
+    std::vector<std::unique_ptr<Shape>>& replacements)
+{
+  const auto it = std::ranges::find_if(pad_hops_, [shape](const PadHop& hop) {
+    return hop.escape.get() == shape || hop.route.get() == shape;
+  });
+  if (it == pad_hops_.end()) {
+    GridComponent::replaceShape(shape, replacements);
+    return;
+  }
+  PadHop hop = *it;
+  const bool escape = hop.escape.get() == shape;
+  const auto target = getPadHopTarget(hop);
+  std::unique_ptr<Shape> keep;
+  for (auto& replacement : replacements) {
+    const auto& rect = replacement->getRect();
+    const bool connected = escape ? replacement->hasITermConnections()
+                                        && rect.overlaps(hop.route->getRect())
+                                  : target != nullptr
+                                        && rect.overlaps(hop.escape->getRect())
+                                        && rect.overlaps(target->getRect());
+    if (connected) {
+      keep = std::move(replacement);
+      break;
+    }
+  }
+  if (keep == nullptr) {
+    removeShape(shape);
+    return;
+  }
+  pad_hops_.erase(it);
+  const auto vias = shape->getVias();
+  GridComponent::removeShape(shape);
+  const auto added = addShape(std::move(keep));
+  if (added == nullptr) {
+    GridComponent::removeShape(escape ? hop.route.get() : hop.escape.get());
+    return;
+  }
+  for (const auto& via : vias) {
+    if (via->getArea().overlaps(added->getRect())) {
+      if (via->getConnect()->getLowerLayer() == added->getLayer()) {
+        via->setLowerShape(added);
+      } else {
+        via->setUpperShape(added);
+      }
+      added->addVia(via);
+    }
+  }
+  (escape ? hop.escape : hop.route) = added;
+  pad_hops_.push_back(std::move(hop));
+}
+
+bool PadDirectConnectionStraps::isPadHop(const Shape* first,
+                                         const Shape* second) const
+{
+  return std::ranges::any_of(pad_hops_, [&](const PadHop& hop) {
+    return (hop.escape.get() == first && hop.route.get() == second)
+           || (hop.route.get() == first && hop.escape.get() == second);
+  });
+}
+
+ShapePtr PadDirectConnectionStraps::getPadHopTarget(const PadHop& hop) const
+{
+  const auto eligible = [&](const ShapePtr& target) {
+    return target != nullptr && target != hop.escape
+           && target->getLayer() == hop.target->getLayer()
+           && target->getNet() == hop.route->getNet()
+           && target->getRect().overlaps(hop.route->getRect())
+           && isTargetShape(target.get());
+  };
+  if (hop.route->getLayer() != hop.target->getLayer()) {
+    for (const auto& via : hop.route->getVias()) {
+      if (!via->isValid() || via->isFailed()) {
+        continue;
+      }
+      const auto target = via->getLowerShape() == hop.route
+                              ? via->getUpperShape()
+                              : via->getLowerShape();
+      if (eligible(target)) {
+        return target;
+      }
+    }
+  }
+  if (const auto* component = hop.target->getGridComponent()) {
+    const auto shapes = component->getShapes().find(hop.target->getLayer());
+    if (shapes != component->getShapes().end()) {
+      for (const auto& target : shapes->second) {
+        if (eligible(target)) {
+          return target;
+        }
+      }
+    }
+  } else if (eligible(hop.target)) {
+    return hop.target;
+  }
+  return nullptr;
+}
+
+bool PadDirectConnectionStraps::removeFailedPadHops()
+{
+  const auto connected = [](const ShapePtr& first, const ShapePtr& second) {
+    if (first->getLayer() == second->getLayer()) {
+      return first->getRect().overlaps(second->getRect());
+    }
+    return std::ranges::any_of(first->getVias(), [&](const ViaPtr& via) {
+      return via->isValid() && !via->isFailed()
+             && ((via->getLowerShape() == first
+                  && via->getUpperShape() == second)
+                 || (via->getUpperShape() == first
+                     && via->getLowerShape() == second));
+    });
+  };
+  std::vector<ShapePtr> remove;
+  for (const auto& hop : pad_hops_) {
+    const auto target = getPadHopTarget(hop);
+    if (!connected(hop.escape, hop.route) || target == nullptr
+        || !connected(hop.route, target)) {
+      remove.push_back(hop.route);
+    }
+  }
+  for (const auto& shape : remove) {
+    removeShape(shape.get());
+  }
+  return !remove.empty();
 }
 
 void PadDirectConnectionStraps::unifyConnectionTypes(

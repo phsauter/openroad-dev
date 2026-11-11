@@ -63,11 +63,11 @@ class GridComponent
   const Shape::ShapeTreeMap& getShapes() const { return shapes_; }
   void getShapes(Shape::ShapeTreeMap& shapes) const;
   void removeShapes(Shape::ShapeTreeMap& shapes) const;
-  void removeShape(Shape* shape);
-  void replaceShape(Shape* shape, std::unique_ptr<Shape> replacement);
-  void replaceShape(Shape* shape,
-                    std::vector<std::unique_ptr<Shape>>& replacements);
-  void clearShapes() { shapes_.clear(); }
+  virtual void removeShape(Shape* shape);
+  virtual void replaceShape(Shape* shape, std::unique_ptr<Shape> replacement);
+  virtual void replaceShape(Shape* shape,
+                            std::vector<std::unique_ptr<Shape>>& replacements);
+  virtual void clearShapes() { shapes_.clear(); }
   int getShapeCount() const;
   std::set<odb::Rect> getShapeRects() const;
 
