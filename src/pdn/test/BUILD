@@ -613,3 +613,16 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+regression_test(
+    name = "pdn_repair_via_conflicts",
+    check_log = False,
+    check_passfail = True,
+    data = [
+        "helpers.tcl",
+        "pdn_repair_via_conflicts.tcl",
+        "Nangate45/Nangate45_tech.lef",
+        "Nangate45/Nangate45_stdcell.lef",
+        "nangate_gcd/floorplan.def",
+    ],
+)

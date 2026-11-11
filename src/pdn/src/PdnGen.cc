@@ -815,7 +815,9 @@ void PdnGen::createSrouteWires(
                              insts);
 }
 
-void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
+void PdnGen::writeToDb(bool add_pins,
+                       const std::string& report_file,
+                       bool repair_via_conflicts) const
 {
   odb::PtrMap<odb::dbNet, odb::dbSWire*> net_map;
   odb::PtrMap<odb::dbNet, odb::dbBTerm*> net_bterm_map;
@@ -924,10 +926,14 @@ void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
 
   std::map<Shape*, std::vector<odb::dbBox*>, decltype(shape_less)> shape_map(
       shape_less);
+  Grid::ViaShapeMap via_shapes;
   for (auto* domain : domains) {
     for (const auto& grid : domain->getGrids()) {
       const auto db_shapes
-          = grid->writeToDb(net_map, net_bterm_map, obstructions);
+          = grid->writeToDb(net_map,
+                            net_bterm_map,
+                            obstructions,
+                            repair_via_conflicts ? &via_shapes : nullptr);
       shape_map.insert(db_shapes.begin(), db_shapes.end());
 
       grid->makeRoutingObstructions(db_->getChip()->getBlock());
@@ -948,6 +954,10 @@ void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
         }
       }
     }
+  }
+
+  if (repair_via_conflicts) {
+    ViaRepair::repairConflicts(via_shapes, net_map);
   }
 
   // Remove empty swires

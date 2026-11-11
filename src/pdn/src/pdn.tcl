@@ -8,13 +8,14 @@ sta::define_cmd_args "pdngen" {[-skip_trim] \
                                [-report_only] \
                                [-check_only] \
                                [-failed_via_report file] \
+                               [-repair_via_conflicts] \
                                [-verbose]
 }
 
 proc pdngen { args } {
   sta::parse_key_args "pdngen" args \
     keys {-failed_via_report} \
-    flags {-skip_trim -dont_add_pins -reset -ripup -report_only -verbose -check_only}
+    flags {-skip_trim -dont_add_pins -reset -ripup -report_only -verbose -check_only -repair_via_conflicts}
 
   sta::check_argc_eq0 "pdngen" $args
 
@@ -61,7 +62,8 @@ proc pdngen { args } {
     set failed_via_report $keys(-failed_via_report)
   }
 
-  pdn::run_pdngen $trim $add_pins $failed_via_report
+  pdn::run_pdngen $trim $add_pins $failed_via_report \
+    [info exists flags(-repair_via_conflicts)]
 }
 
 sta::define_cmd_args "set_voltage_domain" {-name domain_name \

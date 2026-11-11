@@ -19,6 +19,8 @@ class Logger;
 
 namespace pdn {
 
+class Via;
+
 class ViaRepair
 {
   using ViaValue = std::pair<odb::Rect, odb::dbSBox*>;
@@ -27,6 +29,10 @@ class ViaRepair
 
  public:
   ViaRepair(utl::Logger* logger, const odb::PtrSet<odb::dbNet>& nets);
+
+  static void repairConflicts(
+      const std::map<Via*, odb::PtrSet<odb::dbSBox>>& via_shapes,
+      const odb::PtrMap<odb::dbNet, odb::dbSWire*>& net_map);
 
   void repair();
 

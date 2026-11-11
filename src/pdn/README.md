@@ -24,6 +24,7 @@ pdngen
     [-check_only]
     [-dont_add_pins]
     [-failed_via_report file]
+    [-repair_via_conflicts]
     [-report_only]
     [-reset]
     [-ripup]
@@ -36,6 +37,7 @@ pdngen
 | ----- | ----- |
 | `[-dont_add_pins]` | Prevent the creation of block pins. |
 | `[-failed_via_report]` | Generate a report file which can be viewed in the DRC viewer for all the failed vias (ie. those that did not get built or were removed). |
+| `[-repair_via_conflicts]` | Repair nearby same-net via arrays when their original landing metal can preserve connectivity. Disabled by default; retain arrays that require new metal. |
 | `[-report_only]` | Print the current specifications. |
 | `[-check_only]` | Check the current setup for errors. |
 | `[-reset]` | Reset the grid and domain specifications. |

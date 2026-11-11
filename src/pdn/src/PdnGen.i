@@ -65,13 +65,14 @@ using utl::PDN;
 
 namespace pdn {
 
-void run_pdngen(bool trim, bool add_pins, const char* report_file)
+void run_pdngen(bool trim, bool add_pins, const char* report_file,
+                bool repair_via_conflicts)
 {
   utl::Timer timer;
   PdnGen* pdngen = ord::getPdnGen();
   pdngen->checkSetup();
   pdngen->buildGrids(trim);
-  pdngen->writeToDb(add_pins, report_file);
+  pdngen->writeToDb(add_pins, report_file, repair_via_conflicts);
   if (pdngen->getDebugRenderer() == nullptr) {
     // keep the shapes while debugging so the renderer still shows them
     pdngen->resetShapes();

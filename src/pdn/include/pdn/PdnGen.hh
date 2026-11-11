@@ -171,7 +171,9 @@ class PdnGen
       const odb::PtrMap<odb::dbTechLayer, std::pair<int, bool>>& split_cuts,
       const std::string& dont_use_vias);
 
-  void writeToDb(bool add_pins, const std::string& report_file = "") const;
+  void writeToDb(bool add_pins,
+                 const std::string& report_file = "",
+                 bool repair_via_conflicts = false) const;
   void ripUp(odb::dbNet* net);
 
   void setDebugRenderer(bool on);

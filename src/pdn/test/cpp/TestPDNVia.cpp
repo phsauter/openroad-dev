@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <utility>
@@ -11,9 +12,11 @@
 #include "PdnTest.h"
 #include "gtest/gtest.h"
 #include "odb/db.h"
+#include "odb/dbShape.h"
 #include "techlayer.h"
 #include "tst/physical_builder.h"
 #include "via.h"
+#include "via_repair.h"
 
 namespace pdn {
 namespace {
@@ -3948,6 +3951,337 @@ TEST_F(TestPDNViaTech, TechViaFitsShapesAcceptsBothEndpointsBridging)
   TechViaGeneratorAccess gen(
       getLogger(), s.via, lower, loose(), upper, loose());
   EXPECT_TRUE(gen.callFitsShapes());
+}
+
+class TestViaConflicts : public PdnTest
+{
+ protected:
+  void SetUp() override
+  {
+    PdnTest::SetUp();
+    stack_ = makeBasicViaStack();
+    stack_.cut->setSpacing(20);
+    power_ = odb::dbNet::create(block(), "VDD");
+    wires_[power_] = odb::dbSWire::create(power_, odb::dbWireType::ROUTED);
+  }
+
+  odb::dbSBox* addVia(int x,
+                      int y = 100,
+                      odb::dbNet* net = nullptr,
+                      odb::dbTechVia* tech_via = nullptr,
+                      bool ring = false)
+  {
+    if (net == nullptr) {
+      net = power_;
+    }
+    if (tech_via == nullptr) {
+      tech_via = stack_.via;
+    }
+    auto* box = odb::dbSBox::create(
+        wires_.at(net), tech_via, x, y, odb::dbWireShapeType::STRIPE);
+    const odb::Rect area(x - 35, y - 35, x + 35, y + 35);
+    const auto lower = std::make_shared<Shape>(
+        stack_.bottom,
+        net,
+        area,
+        ring ? odb::dbWireShapeType::RING : odb::dbWireShapeType::STRIPE);
+    const auto upper = std::make_shared<Shape>(stack_.top, net, area);
+    auto via = std::make_shared<Via>(nullptr, net, area, lower, upper);
+    boxes_[via.get()].insert(box);
+    vias_.push_back(via);
+    return box;
+  }
+
+  size_t viaCount() const
+  {
+    size_t count = 0;
+    for (const auto& [net, wire] : wires_) {
+      for (auto* box : wire->getWires()) {
+        count += box->isVia();
+      }
+    }
+    return count;
+  }
+
+  odb::PtrMap<odb::dbTechLayer, Region> metalRegions() const
+  {
+    odb::PtrMap<odb::dbTechLayer, Region> regions;
+    for (auto* box : wires_.at(power_)->getWires()) {
+      if (box->isVia()) {
+        std::vector<odb::dbShape> shapes;
+        box->getViaBoxes(shapes);
+        for (const auto& shape : shapes) {
+          if (shape.getTechLayer()->getType()
+              == odb::dbTechLayerType::ROUTING) {
+            auto& region = regions[shape.getTechLayer()];
+            region = region.unite(Region(shape.getBox()));
+          }
+        }
+      } else {
+        auto& region = regions[box->getTechLayer()];
+        region = region.unite(Region(box->getBox()));
+      }
+    }
+    return regions;
+  }
+
+  ViaStack stack_;
+  odb::dbNet* power_;
+  odb::PtrMap<odb::dbNet, odb::dbSWire*> wires_;
+  Grid::ViaShapeMap boxes_;
+  std::vector<ViaPtr> vias_;
+};
+
+TEST_F(TestViaConflicts, RetiresCutsAndPreservesExactLandingUnion)
+{
+  auto* winner = addVia(100, 100, nullptr, nullptr, true);
+  addVia(160);
+  const auto before = metalRegions();
+  ViaRepair::repairConflicts(boxes_, wires_);
+  ASSERT_EQ(viaCount(), 1u);
+  const auto after = metalRegions();
+  for (const auto& [layer, region] : before) {
+    EXPECT_TRUE(region.subtract(after.at(layer)).isEmpty());
+    EXPECT_TRUE(after.at(layer).subtract(region).isEmpty());
+  }
+  int landings = 0;
+  for (auto* box : wires_.at(power_)->getWires()) {
+    if (box->isVia()) {
+      EXPECT_EQ(box, winner);
+    } else {
+      landings++;
+      EXPECT_EQ(box->getWireShapeType(), odb::dbWireShapeType::DRCFILL);
+      EXPECT_EQ(box->getSWire()->getNet(), power_);
+      EXPECT_EQ(box->getBox(), odb::Rect(125, 65, 195, 135));
+      EXPECT_TRUE(box->getTechLayer() == stack_.bottom
+                  || box->getTechLayer() == stack_.top);
+    }
+  }
+  EXPECT_EQ(landings, 2);
+}
+
+TEST_F(TestViaConflicts, OrdinaryRoutingAvoidsRedundantLandings)
+{
+  addVia(100);
+  addVia(160);
+  for (auto* layer : {stack_.bottom, stack_.top}) {
+    odb::dbSBox::create(
+        wires_.at(power_), layer, 0, 0, 300, 200, odb::dbWireShapeType::STRIPE);
+  }
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 1u);
+  EXPECT_EQ(wires_.at(power_)->getWires().size(), 3u);
+}
+
+TEST_F(TestViaConflicts, ExactSpacingIsLegal)
+{
+  addVia(100);
+  addVia(170);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, SpacingMinusOneConflicts)
+{
+  addVia(100);
+  addVia(169);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 1u);
+}
+
+TEST_F(TestViaConflicts, IdenticalCutsAreRetained)
+{
+  addVia(100);
+  addVia(100);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, DifferentNetsAndCutLayersAreIndependent)
+{
+  addVia(100);
+  auto* ground = odb::dbNet::create(block(), "VSS");
+  wires_[ground] = odb::dbSWire::create(ground, odb::dbWireType::ROUTED);
+  addVia(160, 100, ground);
+  const auto other = makeBasicViaStack("other_");
+  addVia(160, 100, nullptr, other.via);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 3u);
+}
+
+TEST_F(TestViaConflicts, DisconnectedLayerRetainsOriginalVias)
+{
+  auto* narrow = odb::dbTechVia::create(tech(), "narrow_top");
+  odb::dbBox::create(narrow, stack_.bottom, -35, -35, 35, 35);
+  odb::dbBox::create(narrow, stack_.cut, -25, -25, 25, 25);
+  odb::dbBox::create(narrow, stack_.top, -25, -25, 25, 25);
+  addVia(100, 100, nullptr, narrow);
+  addVia(160, 100, nullptr, narrow);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+  EXPECT_EQ(wires_.at(power_)->getWires().size(), 2u);
+}
+
+TEST_F(TestViaConflicts, DisjointWinnerLandingsRetainOriginalVias)
+{
+  odb::dbBox::create(stack_.via, stack_.bottom, 200, 200, 270, 270);
+  addVia(100, 100, nullptr, nullptr, true);
+  addVia(160);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, ReplacementChainsKeepTheirFinalWinner)
+{
+  auto* winner = addVia(100);
+  addVia(160);
+  addVia(220);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 1u);
+  for (auto* box : wires_.at(power_)->getWires()) {
+    if (box->isVia()) {
+      EXPECT_EQ(box, winner);
+    }
+  }
+}
+
+TEST_F(TestViaConflicts, SeededIsolatedPairsMatchExactPredicate)
+{
+  std::mt19937 random(1507);
+  size_t expected = 0;
+  for (int i = 0; i < 240; i++) {
+    const int dx = 1 + random() % 100;
+    const int x = 100 + 1000 * i;
+    addVia(x);
+    addVia(x + dx);
+    // The cut predicate conflicts below 70; landings also overlap below 70.
+    expected += dx < 70 ? 1 : 2;
+  }
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), expected);
+}
+
+TEST_F(TestViaConflicts, MulticutBoundsDoNotReplaceExactCutSpacing)
+{
+  auto* array = odb::dbTechVia::create(tech(), "array");
+  odb::dbBox::create(array, stack_.bottom, -35, -135, 35, 135);
+  odb::dbBox::create(array, stack_.cut, -25, -125, 25, -75);
+  odb::dbBox::create(array, stack_.cut, -25, 75, 25, 125);
+  odb::dbBox::create(array, stack_.top, -35, -135, 35, 135);
+  addVia(100, 200, nullptr, array);
+  addVia(101, 200);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, ZeroSpacingRetainsSeparatedCuts)
+{
+  stack_.cut->setSpacing(0);
+  addVia(100);
+  addVia(151);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, EmptyCutDefinitionIsIgnored)
+{
+  auto* no_cut = odb::dbTechVia::create(tech(), "no_cut");
+  odb::dbBox::create(no_cut, stack_.bottom, -35, -35, 35, 35);
+  odb::dbBox::create(no_cut, stack_.top, -35, -35, 35, 35);
+  addVia(100);
+  addVia(160, 100, nullptr, no_cut);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+}
+
+TEST_F(TestViaConflicts, FullyTiedAreasChooseTheSameCutGeometry)
+{
+  for (const bool reverse : {false, true}) {
+    auto* net = odb::dbNet::create(block(), reverse ? "reverse" : "forward");
+    wires_[net] = odb::dbSWire::create(net, odb::dbWireType::ROUTED);
+    Grid::ViaShapeMap tied;
+    for (const int x :
+         reverse ? std::vector<int>{101, 100} : std::vector<int>{100, 101}) {
+      auto* box = addVia(x, 100, net);
+      const auto& original = vias_.back();
+      auto via = std::make_shared<Via>(nullptr,
+                                       net,
+                                       odb::Rect(0, 0, 300, 300),
+                                       original->getLowerShape(),
+                                       original->getUpperShape());
+      tied[via.get()].insert(box);
+      vias_.push_back(via);
+    }
+    ViaRepair::repairConflicts(tied, wires_);
+    int survivors = 0;
+    for (auto* box : wires_.at(net)->getWires()) {
+      if (box->isVia()) {
+        survivors++;
+        EXPECT_EQ(box->getViaXY(), odb::Point(100, 100));
+      }
+    }
+    EXPECT_EQ(survivors, 1);
+  }
+}
+
+TEST_F(TestViaConflicts, EdgeAndCornerOnlyLandingsRetainOriginalVias)
+{
+  stack_.cut->setSpacing(30);
+  addVia(100);
+  addVia(170);
+  addVia(1000, 1000);
+  addVia(1070, 1070);
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 4u);
+  EXPECT_EQ(wires_.at(power_)->getWires().size(), 4u);
+}
+
+TEST_F(TestViaConflicts, SkippedChainMemberDoesNotBlockASafeRetirement)
+{
+  auto* extra = odb::dbTechVia::create(tech(), "extra_landing");
+  odb::dbBox::create(extra, stack_.bottom, -35, -35, 35, 35);
+  odb::dbBox::create(extra, stack_.cut, -25, -25, 25, 25);
+  odb::dbBox::create(extra, stack_.top, -35, -35, 35, 35);
+  odb::dbBox::create(extra, stack_.top, 200, 200, 270, 270);
+  auto* winner = addVia(100);
+  auto* retained = addVia(160, 100, nullptr, extra);
+  addVia(220);
+  const auto before = metalRegions();
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+  for (auto* box : wires_.at(power_)->getWires()) {
+    if (box->isVia()) {
+      EXPECT_TRUE(box == winner || box == retained);
+    }
+  }
+  const auto after = metalRegions();
+  for (const auto& [layer, region] : before) {
+    EXPECT_TRUE(region.subtract(after.at(layer)).isEmpty());
+    EXPECT_TRUE(after.at(layer).subtract(region).isEmpty());
+  }
+}
+
+TEST_F(TestViaConflicts, RetiringOneStackTransitionPreservesItsNeighbor)
+{
+  const auto upper = addStackedLevel(stack_);
+  auto* winner = addVia(100, 100, nullptr, nullptr, true);
+  addVia(160);
+  auto* neighbor = odb::dbSBox::create(
+      wires_.at(power_), upper.via, 160, 100, odb::dbWireShapeType::STRIPE);
+  boxes_[vias_.back().get()].insert(neighbor);
+  const auto before = metalRegions();
+  ViaRepair::repairConflicts(boxes_, wires_);
+  EXPECT_EQ(viaCount(), 2u);
+  for (auto* box : wires_.at(power_)->getWires()) {
+    if (box->isVia()) {
+      EXPECT_TRUE(box == winner || box == neighbor);
+    }
+  }
+  const auto after = metalRegions();
+  for (const auto& [layer, region] : before) {
+    EXPECT_TRUE(region.subtract(after.at(layer)).isEmpty());
+    EXPECT_TRUE(after.at(layer).subtract(region).isEmpty());
+  }
 }
 
 }  // namespace
