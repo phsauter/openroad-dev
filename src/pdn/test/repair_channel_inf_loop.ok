@@ -10,4 +10,9 @@
 [WARNING PDN-0178] Remaining channel (0.0000, -1.3150) - (2621.0800, 112.3150) on M1 for nets: GND, VDD
 [WARNING PDN-0178] Remaining channel (0.0000, 112.3150) - (1812.5800, 1028.0650) on M1 for nets: GND, VDD
 [ERROR PDN-0179] Unable to repair all channels.
+[WARNING PDN-0195] Removing 4700 via(s) between M1 and M3 at (910.6200 um, 361.8850 um) for VDD
+[WARNING PDN-0195] Removing 9400 via(s) between M1 and M3 at (910.6200 um, 795.0900 um) for GND
+[WARNING PDN-0195] Removing 14100 via(s) between M1 and M3 at (910.6200 um, 823.0650 um) for VDD
 PDN-0179
+Summary 5 / 5 (100% pass)
+pass

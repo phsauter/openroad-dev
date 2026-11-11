@@ -14,6 +14,7 @@
 #include "odb/geom.h"
 #include "pdn/PdnGen.hh"
 #include "polygon.h"
+#include "straps.h"
 #include "tst/physical_builder.h"
 
 namespace pdn {
@@ -78,6 +79,55 @@ class TestDomain : public PdnTest
   odb::dbNet* power_ = nullptr;
   odb::dbNet* ground_ = nullptr;
 };
+
+class FailingStraps : public Straps
+{
+ public:
+  using Straps::Straps;
+
+  void makeShapes(const Shape::ShapeTreeMap&) override
+  {
+    auto shape = std::make_unique<Shape>(getLayer(),
+                                         getNets().front(),
+                                         odb::Rect(100, 100, 1000, 200),
+                                         odb::dbWireShapeType::STRIPE);
+    shape->setLocked();
+    addShape(std::move(shape));
+    auto* category = odb::dbMarkerCategory::create(getBlock(), "PDN");
+    odb::dbMarker::create(category)->addShape(odb::Rect(100, 100, 1000, 200));
+    throw std::runtime_error("partial build failure");
+  }
+};
+
+TEST_F(TestDomain, BuildFailurePreservesCurrentMarkersAndPartialGeometry)
+{
+  auto* layer = tst::addRoutingLayer(tech(), "M1");
+  pdngen_->setCoreDomain(power_, nullptr, ground_, {});
+  auto* domain = pdngen_->getDomains().front();
+  auto grid = std::make_unique<TestGrid>(
+      domain, "grid", true, std::vector<odb::dbTechLayer*>{});
+  grid->addStrap(std::make_unique<FailingStraps>(grid.get(), layer, 100, 1000));
+  domain->addGrid(std::move(grid));
+  auto* stale = odb::dbMarkerCategory::create(block(), "PDN");
+  odb::dbMarkerCategory::create(stale, "stale");
+
+  for (int run = 0; run < 2; ++run) {
+    try {
+      pdngen_->buildGrids(true);
+      FAIL() << "Expected a build failure";
+    } catch (const std::runtime_error& error) {
+      EXPECT_STREQ(error.what(), "partial build failure");
+    }
+    pdngen_->writeToDb(false);
+    auto* category = block()->findMarkerCategory("PDN");
+    ASSERT_NE(category, nullptr);
+    EXPECT_EQ(category->findMarkerCategory("stale"), nullptr);
+    EXPECT_EQ(category->getAllMarkers().size(), 1u);
+    ASSERT_FALSE(power_->getSWires().empty());
+    EXPECT_EQ((*power_->getSWires().begin())->getWires().size(), 1u);
+    pdngen_->ripUp(nullptr);
+  }
+}
 
 // -------- Core (named) constructor --------
 

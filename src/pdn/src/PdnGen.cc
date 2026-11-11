@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <memory>
 #include <set>
@@ -67,6 +68,9 @@ void PdnGen::buildGrids(bool trim)
   auto* block = db_->getChip()->getBlock();
 
   resetShapes();
+  if (auto* category = block->findMarkerCategory("PDN")) {
+    odb::dbMarkerCategory::destroy(category);
+  }
 
   const std::vector<Grid*> grids = getGrids(true);
 
@@ -115,10 +119,16 @@ void PdnGen::buildGrids(bool trim)
   }
   all_shapes_vec.clear();
 
+  std::exception_ptr build_error;
   for (auto* grid : grids) {
     debugPrint(
         logger_, utl::PDN, "Make", 2, "Build start grid - {}", grid->getName());
-    grid->makeShapes(all_shapes, block_obs);
+    try {
+      grid->makeShapes(all_shapes, block_obs);
+    } catch (...) {
+      build_error = std::current_exception();
+      break;
+    }
     for (const auto& [layer, shapes] : grid->getShapes()) {
       auto& all_shapes_layer = all_shapes[layer];
       for (auto& shape : shapes) {
@@ -136,6 +146,11 @@ void PdnGen::buildGrids(bool trim)
     trimShapes();
 
     cleanupVias();
+  }
+
+  if (build_error != nullptr) {
+    updateRenderer(false);
+    std::rethrow_exception(build_error);
   }
 
   bool failed = false;
@@ -964,12 +979,6 @@ void PdnGen::writeToDb(bool add_pins, const std::string& report_file) const
     if (bterm->getBPins().empty()) {
       odb::dbBTerm::destroy(bterm);
     }
-  }
-
-  // remove stale results
-  odb::dbMarkerCategory* category = block->findMarkerCategory("PDN");
-  if (category != nullptr) {
-    odb::dbMarkerCategory::destroy(category);
   }
 
   for (auto* grid : getGrids()) {

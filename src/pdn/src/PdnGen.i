@@ -6,8 +6,9 @@
 #include "odb/db.h"
 #include "utl/timer.h"
 #include <array>
-#include <regex>
+#include <exception>
 #include <memory>
+#include <regex>
 #include <vector>
 
 namespace ord {
@@ -70,11 +71,19 @@ void run_pdngen(bool trim, bool add_pins, const char* report_file)
   utl::Timer timer;
   PdnGen* pdngen = ord::getPdnGen();
   pdngen->checkSetup();
-  pdngen->buildGrids(trim);
+  std::exception_ptr build_error;
+  try {
+    pdngen->buildGrids(trim);
+  } catch (...) {
+    build_error = std::current_exception();
+  }
   pdngen->writeToDb(add_pins, report_file);
   if (pdngen->getDebugRenderer() == nullptr) {
     // keep the shapes while debugging so the renderer still shows them
     pdngen->resetShapes();
+  }
+  if (build_error != nullptr) {
+    std::rethrow_exception(build_error);
   }
   ord::getLogger()->info(utl::PDN, 500, "Runtime: {:.2f}s", timer.elapsed());
 }

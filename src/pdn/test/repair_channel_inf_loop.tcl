@@ -1,8 +1,11 @@
-# Check for repair channels with straps in same direction and reject
-# this avoids the infinate loop reported in: https://github.com/The-OpenROAD-Project/OpenROAD/issues/5905
+# Retain partial output when parallel straps leave unrepairable channels.
+
+set test_name repair_channel_inf_loop
 
 read_lef repair_channel_inf_loop/tech_macro.lef
 read_def repair_channel_inf_loop/floorplan.def
+
+source "helpers.tcl"
 
 set_voltage_domain -power VDD -ground GND
 
@@ -16,5 +19,23 @@ add_pdn_stripe -layer M4 -width 11.280 -pitch 526.400 -spacing 16.920 -offset 37
 add_pdn_connect -layers {M3 M4}
 add_pdn_connect -layers {M1 M3}
 
-catch { pdngen } err
+set report [make_result_file ${test_name}.rpt]
+catch { pdngen -failed_via_report $report } err
 puts $err
+
+check "original build error" { set err } PDN-0179
+set block [ord::get_db_block]
+set category [$block findMarkerCategory PDN]
+check "repair channel markers" {
+  [$category findMarkerCategory "Repair channels"] getMarkerCount
+} 2
+foreach net {VDD GND} {
+  check "partial $net grid" {
+    expr { [llength [[$block findNet $net] getSWires]] > 0 }
+  } 1
+}
+set stream [open $report]
+set markers [read $stream]
+close $stream
+check "repair channel report" { string match {*Repair channels*} $markers } 1
+exit_summary
