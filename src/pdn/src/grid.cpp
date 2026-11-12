@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <optional>
@@ -501,6 +502,211 @@ Shape::ShapeTreeMap Grid::getShapes() const
   }
 
   return Shape::convertVectorToTree(shapes);
+}
+
+namespace {
+
+std::array<std::pair<ShapePtr, Connect*>, 2> findMacroRings(
+    const ShapePtr& shape,
+    const Shape::ShapeTreeMap& global_shapes)
+{
+  const auto* grid = shape->getGridComponent()->getGrid();
+  auto* layer = shape->getLayer();
+  const bool horizontal = shape->isHorizontal();
+  odb::Rect corridor = grid->getBlock()->getDieArea();
+  const odb::Rect& rect = shape->getRect();
+  if (horizontal) {
+    corridor.set_ylo(rect.yMin());
+    corridor.set_yhi(rect.yMax());
+  } else {
+    corridor.set_xlo(rect.xMin());
+    corridor.set_xhi(rect.xMax());
+  }
+  std::array<std::pair<ShapePtr, Connect*>, 2> targets{};
+  std::array<int, 2> distances{};
+  for (const auto& [ring_layer, rings] : global_shapes) {
+    if (ring_layer->getType() != odb::dbTechLayerType::ROUTING
+        || std::abs(ring_layer->getRoutingLevel() - layer->getRoutingLevel())
+               != 1) {
+      continue;
+    }
+    for (auto it = rings.qbegin(bgi::intersects(corridor)); it != rings.qend();
+         ++it) {
+      const ShapePtr& ring = *it;
+      const auto* component = ring->getGridComponent();
+      if (ring->getType() != odb::dbWireShapeType::RING
+          || ring->getNet() != shape->getNet() || component == nullptr
+          || component->getGrid()->type() != Grid::kInstance
+          || component->getDomain() != grid->getDomain()
+          || (horizontal ? !ring->isVertical() : !ring->isHorizontal())) {
+        continue;
+      }
+      Connect* connect = nullptr;
+      for (const auto& candidate : component->getGrid()->getConnect()) {
+        if ((candidate->getLowerLayer() == layer
+             && candidate->getUpperLayer() == ring_layer)
+            || (candidate->getLowerLayer() == ring_layer
+                && candidate->getUpperLayer() == layer)) {
+          connect = candidate.get();
+          break;
+        }
+      }
+      if (connect == nullptr) {
+        continue;
+      }
+      const odb::Rect& target = ring->getRect();
+      const int low = horizontal ? rect.xMin() : rect.yMin();
+      const int high = horizontal ? rect.xMax() : rect.yMax();
+      const int target_low = horizontal ? target.xMin() : target.yMin();
+      const int target_high = horizontal ? target.xMax() : target.yMax();
+      if ((horizontal
+           && (target.yMin() >= rect.yMax() || target.yMax() <= rect.yMin()))
+          || (!horizontal
+              && (target.xMin() >= rect.xMax() || target.xMax() <= rect.xMin()))
+          || (target_low < high && target_high > low)) {
+        continue;
+      }
+      const int side = target_high <= low ? 0 : 1;
+      const int distance = side == 0 ? low - target_high : target_low - high;
+      if (targets[side].first == nullptr || distance < distances[side]) {
+        targets[side] = {ring, connect};
+        distances[side] = distance;
+      }
+    }
+  }
+  return targets;
+}
+
+std::unique_ptr<Shape> extendToMacroRing(
+    const Shape* shape,
+    Shape* original,
+    const ShapePtr& target,
+    const ShapePtr& connected_target,
+    const Shape::ShapeTree& shapes,
+    const Shape::ObstructionTree& obstructions)
+{
+  const auto* grid = original->getGridComponent()->getGrid();
+  const auto* target_grid = target->getGridComponent()->getGrid();
+  const auto* connected_grid
+      = connected_target == nullptr
+            ? nullptr
+            : connected_target->getGridComponent()->getGrid();
+  odb::Rect extension = shape->getRect();
+  const odb::Rect& edge = target->getRect();
+  if (shape->isHorizontal()) {
+    extension.set_xlo(std::min(extension.xMin(), edge.xMin()));
+    extension.set_xhi(std::max(extension.xMax(), edge.xMax()));
+  } else {
+    extension.set_ylo(std::min(extension.yMin(), edge.yMin()));
+    extension.set_yhi(std::max(extension.yMax(), edge.yMax()));
+  }
+  const auto filter =
+      [grid, target_grid, connected_grid, &extension](const ShapePtr& other) {
+        // Grid claims may cover the landing, but real metal still blocks it.
+        return other->shapeType() != Shape::kGridObs
+               || (other->getRect().overlaps(extension)
+                   && !static_cast<GridObsShape*>(other.get())->belongsTo(grid)
+                   && !static_cast<GridObsShape*>(other.get())
+                           ->belongsTo(target_grid)
+                   && (connected_grid == nullptr
+                       || !static_cast<GridObsShape*>(other.get())
+                               ->belongsTo(connected_grid)));
+      };
+  auto extended = shape->extendTo(edge, shapes, obstructions, original, filter);
+  // Exempting a ring's grid claim must not open the macro body.
+  if (extended != nullptr
+      && (!target_grid->getDomainRegion()
+               .intersect(extended->getRect())
+               .isEmpty()
+          || (connected_grid != nullptr
+              && !connected_grid->getDomainRegion()
+                      .intersect(extended->getRect())
+                      .isEmpty()))) {
+    return nullptr;
+  }
+  return extended;
+}
+
+}  // namespace
+
+std::vector<ViaPtr> Grid::connectToMacroRings(
+    const Shape::ShapeTreeMap& global_shapes,
+    const Shape::ObstructionTreeMap& obstructions)
+{
+  std::vector<ViaPtr> vias;
+  if (type() != kCore) {
+    return vias;
+  }
+
+  for (const auto& [layer, shapes] : getShapes()) {
+    const auto global = global_shapes.find(layer);
+    if (global == global_shapes.end()) {
+      continue;
+    }
+    const auto obs = obstructions.find(layer);
+    const Shape::ObstructionTree empty_obstructions;
+    for (const auto& shape : shapes) {
+      if (shape->getType() != odb::dbWireShapeType::STRIPE
+          || shape->getGridComponent()->type() != GridComponent::kStrap
+          || !shape->isModifiable() || shape->isSquare()) {
+        continue;
+      }
+      auto targets = findMacroRings(shape, global_shapes);
+      auto replacement = shape->copy();
+      ShapePtr connected_target;
+      for (auto& [target, connect] : targets) {
+        if (target == nullptr) {
+          continue;
+        }
+        auto extended = extendToMacroRing(
+            replacement.get(),
+            shape.get(),
+            target,
+            connected_target,
+            global->second,
+            obs == obstructions.end() ? empty_obstructions : obs->second);
+        if (extended == nullptr) {
+          target = nullptr;
+          continue;
+        }
+        replacement = std::move(extended);
+        connected_target = target;
+      }
+      if (connected_target == nullptr) {
+        continue;
+      }
+      std::vector<ViaPtr> contacts;
+      for (const auto& [target, connect] : targets) {
+        if (target == nullptr) {
+          continue;
+        }
+        const bool stripe_lower = connect->getLowerLayer() == layer;
+        contacts.push_back(std::make_shared<Via>(
+            connect,
+            shape->getNet(),
+            replacement->getRect().intersect(target->getRect()),
+            stripe_lower ? shape : target,
+            stripe_lower ? target : shape));
+      }
+      // Pending contacts follow retained contacts through endpoint rebinding.
+      for (const auto& via : contacts) {
+        shape->addVia(via);
+      }
+      shape->getGridComponent()->replaceShape(shape.get(),
+                                              std::move(replacement));
+      for (const auto& via : contacts) {
+        if (!via->isValid()) {
+          getLogger()->error(
+              utl::PDN,
+              243,
+              "Unable to connect a stripe to a macro ring in \"{}\".",
+              getLongName());
+        }
+      }
+      vias.insert(vias.end(), contacts.begin(), contacts.end());
+    }
+  }
+  return vias;
 }
 
 odb::Rect Grid::getDomainArea() const
@@ -1077,6 +1283,19 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
   std::vector<ViaPtr> vias;
   getIntersections(vias, search_shapes);
 
+  makeVias(std::move(vias), search_obstructions, false);
+}
+
+void Grid::addVias(std::vector<ViaPtr> vias,
+                   const Shape::ObstructionTreeMap& obstructions)
+{
+  makeVias(std::move(vias), obstructions, true);
+}
+
+void Grid::makeVias(std::vector<ViaPtr> vias,
+                    const Shape::ObstructionTreeMap& obstructions,
+                    const bool add_to_existing)
+{
   auto remove_set_of_vias = [&vias](std::set<ViaPtr>& remove_vias) {
     std::erase_if(vias,
                   [&](const ViaPtr& via) { return remove_vias.contains(via); });
@@ -1087,7 +1306,11 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
   // remove vias with obstructions in their stack
   for (const auto& via : vias) {
     for (auto* layer : via->getConnect()->getIntermediteLayers()) {
-      const auto& search_obs = search_obstructions[layer];
+      const auto obs = obstructions.find(layer);
+      if (obs == obstructions.end()) {
+        continue;
+      }
+      const auto& search_obs = obs->second;
       if (search_obs.qbegin(
               bgi::intersects(via->getArea())
               && bgi::satisfies(
@@ -1124,6 +1347,11 @@ void Grid::makeVias(const Shape::ShapeTreeMap& global_shapes,
              "Removing {} vias due to obstructions.",
              remove_vias.size());
   remove_set_of_vias(remove_vias);
+
+  // Preserve existing contacts' original obstruction checks.
+  if (add_to_existing) {
+    getVias(vias);
+  }
 
   // Remove overlapping vias and keep largest. Build the tree in one go:
   // the packing constructor is far cheaper than inserting millions of

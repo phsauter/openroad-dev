@@ -120,6 +120,9 @@ class Grid
   void makeShapes(const Shape::ShapeTreeMap& global_shapes,
                   const Shape::ObstructionTreeMap& obstructions);
   virtual Shape::ShapeTreeMap getShapes() const;
+  std::vector<ViaPtr> connectToMacroRings(
+      const Shape::ShapeTreeMap& global_shapes,
+      const Shape::ObstructionTreeMap& obstructions);
 
   // make the vias for the this grid
   void makeVias(const Shape::ShapeTreeMap& global_shapes,
@@ -127,6 +130,8 @@ class Grid
                 Shape::ObstructionTreeMap& local_obstructions);
   void makeVias(const Shape::ShapeTreeMap& global_shapes,
                 const Shape::ObstructionTreeMap& obstructions);
+  void addVias(std::vector<ViaPtr> vias,
+               const Shape::ObstructionTreeMap& obstructions);
   void getVias(std::vector<ViaPtr>& vias) const;
   void clearVias() { vias_.clear(); }
   void removeVia(const ViaPtr& via);
@@ -267,6 +272,10 @@ class Grid
   virtual void cleanupShapes() {}
 
  private:
+  void makeVias(std::vector<ViaPtr> vias,
+                const Shape::ObstructionTreeMap& obstructions,
+                bool add_to_existing);
+
   VoltageDomain* domain_;
   std::string name_;
   bool starts_with_power_;

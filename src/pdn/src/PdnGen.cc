@@ -132,6 +132,41 @@ void PdnGen::buildGrids(bool trim)
 
   updateVias();
 
+  // Macro rings are available only after all independently built grids exist.
+  std::map<Grid*, std::vector<ViaPtr>> macro_vias;
+  for (auto* grid : grids) {
+    if (grid->type() != Grid::kCore) {
+      continue;
+    }
+    const auto old_shapes = grid->getShapes();
+    const auto vias = grid->connectToMacroRings(all_shapes, block_obs);
+    if (vias.empty()) {
+      continue;
+    }
+    for (const auto& via : vias) {
+      macro_vias[via->getGrid()].push_back(via);
+    }
+    for (const auto& [layer, shapes] : old_shapes) {
+      for (const auto& shape : shapes) {
+        all_shapes[layer].remove(shape);
+        block_obs[layer].remove(shape);
+      }
+    }
+    for (const auto& [layer, shapes] : grid->getShapes()) {
+      all_shapes[layer].insert(shapes.begin(), shapes.end());
+    }
+    grid->getObstructions(block_obs);
+  }
+  for (auto* grid : grids) {
+    const auto vias = macro_vias.find(grid);
+    if (vias != macro_vias.end()) {
+      grid->addVias(std::move(vias->second), block_obs);
+    }
+  }
+  if (!macro_vias.empty()) {
+    updateVias();
+  }
+
   if (trim) {
     trimShapes();
 
@@ -182,7 +217,9 @@ void PdnGen::updateVias()
         shape->clearVias();
       }
     }
+  }
 
+  for (auto* grid : grids) {
     std::vector<ViaPtr> all_vias;
     grid->getVias(all_vias);
 
