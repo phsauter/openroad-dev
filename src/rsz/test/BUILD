@@ -314,6 +314,7 @@ TESTS = [
 ]
 
 PASSFAIL_TESTS = [
+    "recover_clock_power",
     "repair_timing_fixed",
     "repair_design_fixed_driver",
     "repair_slew_corner",
@@ -324,10 +325,40 @@ ALL_TESTS = TESTS + PASSFAIL_TESTS
 
 # PASSFAIL tests that assert their own results and have no .ok to diff.
 SELF_CHECKING_TESTS = [
+    "recover_clock_power",
     "repair_design_fixed_driver",
     "repair_slew_corner",
     "gain_buffering_top_port_hier",
 ]
+
+cc_test(
+    name = "TestRecoverClockPower",
+    srcs = ["cpp/TestRecoverClockPower.cc"],
+    data = [
+        "Nangate45/Nangate45.lef",
+        "Nangate45/Nangate45_fast.lib",
+        "Nangate45/Nangate45_typ.lib",
+        "cpp/TestRecoverClockPower.v",
+        "cpp/TestRecoverClockPowerBatch.v",
+        "cpp/TestRecoverClockPowerBudget.v",
+        "cpp/TestRecoverClockPowerCritical.v",
+        "cpp/TestRecoverClockPowerGenerated.v",
+        "cpp/TestRecoverClockPowerRecovery.v",
+        "cpp/TestRecoverClockPowerSpread.v",
+        "cpp/TestRecoverClockPowerWns.v",
+    ],
+    deps = [
+        "//src/dbSta",
+        "//src/dbSta:dbNetwork",
+        "//src/est",
+        "//src/odb/src/db",
+        "//src/rsz:rsz_impl",
+        "//src/sta:opensta_lib",
+        "//src/tst:integrated_fixture",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
 
 # Hierarchical Verilog netlists reused as corpus input by
 # //src/dbSta/test:dbsta_hier_conformance. They stay owned by the tests here;

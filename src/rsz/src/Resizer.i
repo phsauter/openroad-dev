@@ -468,6 +468,25 @@ recover_power(float recover_power_percent, bool match_cell_footprint, bool verbo
   return resizer->recoverPower(recover_power_percent, match_cell_footprint, verbose);
 }
 
+int
+recover_clock_power_cmd(LibertyCellSeq *buffers, float max_skew,
+                        float max_latency, float setup_margin,
+                        float hold_margin, int max_passes,
+                        bool top_down, bool verbose, int max_trials,
+                        bool batch, int max_checkpoints, double max_seconds,
+                        float max_timing_regression,
+                        float max_intermediate_timing_regression,
+                        bool setup_margin_given, bool hold_margin_given)
+{
+  ensureLinked();
+  return getResizer()->recoverClockPower(buffers ? *buffers : LibertyCellSeq{}, max_skew, max_latency,
+                                        setup_margin, hold_margin,
+                                        max_passes, top_down, verbose, max_trials,
+                                        batch, max_checkpoints, max_seconds,
+                                        max_timing_regression, max_intermediate_timing_regression,
+                                        setup_margin_given, hold_margin_given);
+}
+
 ////////////////////////////////////////////////////////////////
 
 // Rebuffer one net (for testing).

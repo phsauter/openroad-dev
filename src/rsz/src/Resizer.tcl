@@ -1,6 +1,92 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2019-2025, The OpenROAD Authors
 
+sta::define_cmd_args "recover_clock_power" {[-buffers buffer_list]\
+  [-max_skew time] [-max_latency time] [-setup_margin time] [-hold_margin time]\
+  [-max_passes positive_integer] [-max_trials positive_integer]\
+  [-strategy bottom_up|top_down|bottom_up_batch]\
+  [-max_checkpoints integer] [-max_seconds seconds]\
+  [-max_timing_regression time] [-max_intermediate_timing_regression time] [-verbose]}
+
+proc recover_clock_power { args } {
+  sta::parse_key_args "recover_clock_power" args keys \
+    {-buffers -max_skew -max_latency -setup_margin -hold_margin -max_passes \
+      -max_trials -strategy -max_checkpoints -max_seconds \
+      -max_timing_regression -max_intermediate_timing_regression} \
+    flags {-verbose}
+  sta::check_argc_eq0 "recover_clock_power" $args
+  set buffers {}
+  if { [info exists keys(-buffers)] } {
+    if { [llength $keys(-buffers)] == 0 } {
+      utl::error RSZ 3300 "-buffers must not be empty."
+    }
+    foreach name $keys(-buffers) {
+      lappend buffers [sta::get_lib_cell_error "-buffers" $name]
+    }
+  }
+  foreach {key default} {-max_skew -1 -max_latency -1 -setup_margin 0 -hold_margin 0 \
+    -max_timing_regression -1 -max_intermediate_timing_regression -1} {
+    set value $default
+    if { [info exists keys($key)] } {
+      set value $keys($key)
+      if { ![string is double -strict $value] || !($value >= 0 && $value < Inf) } {
+        utl::error RSZ 3301 "$key must be a finite nonnegative time."
+      }
+      set value [sta::time_ui_sta $value]
+    }
+    set values($key) $value
+  }
+  set passes 5
+  if { [info exists keys(-max_passes)] } {
+    set passes $keys(-max_passes)
+    if { ![string is integer -strict $passes] || $passes <= 0 } {
+      utl::error RSZ 3302 "-max_passes must be a positive integer."
+    }
+  }
+  set trials 0
+  if { [info exists keys(-max_trials)] } {
+    set trials $keys(-max_trials)
+    if { ![string is integer -strict $trials] || $trials <= 0 } {
+      utl::error RSZ 3316 "-max_trials must be a positive integer."
+    }
+  }
+  set strategy bottom_up
+  if { [info exists keys(-strategy)] } {
+    set strategy $keys(-strategy)
+    if { $strategy ni {bottom_up top_down bottom_up_batch} } {
+      utl::error RSZ 3303 "-strategy must be bottom_up, top_down or bottom_up_batch."
+    }
+  }
+  if {
+    $strategy ne "bottom_up_batch" &&
+    ([info exists keys(-max_checkpoints)] || [info exists keys(-max_seconds)] ||
+      [info exists keys(-max_timing_regression)] ||
+      [info exists keys(-max_intermediate_timing_regression)])
+  } {
+    utl::error RSZ 3319 "Batch budgets require -strategy bottom_up_batch."
+  }
+  set checkpoints 6
+  if { [info exists keys(-max_checkpoints)] } {
+    set checkpoints $keys(-max_checkpoints)
+    if { ![string is integer -strict $checkpoints] || $checkpoints < 2 } {
+      utl::error RSZ 3317 "-max_checkpoints must be an integer of at least 2."
+    }
+  }
+  set seconds 300
+  if { [info exists keys(-max_seconds)] } {
+    set seconds $keys(-max_seconds)
+    if { ![string is double -strict $seconds] || !($seconds > 0 && $seconds < Inf) } {
+      utl::error RSZ 3318 "-max_seconds must be finite and positive."
+    }
+  }
+  return [rsz::recover_clock_power_cmd $buffers $values(-max_skew) \
+    $values(-max_latency) $values(-setup_margin) $values(-hold_margin) $passes \
+    [expr { $strategy eq "top_down" }] [info exists flags(-verbose)] $trials \
+    [expr { $strategy eq "bottom_up_batch" }] $checkpoints $seconds \
+    $values(-max_timing_regression) $values(-max_intermediate_timing_regression) \
+    [info exists keys(-setup_margin)] [info exists keys(-hold_margin)]]
+}
+
 namespace eval rsz {
 proc parse_buffer_cell { keys_var } {
   upvar 1 $keys_var keys

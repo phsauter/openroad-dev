@@ -205,6 +205,199 @@ repair_tie_fanout
 | `-verbose` | Enable verbose logging of repair progress. |
 | `lib_port` | Tie high/low port, which can be a library/cell/port name or object returned by `get_lib_pins`. |
 
+### Recover Clock Power
+
+`recover_clock_power` downsizes placed clock buffers after CTS while preserving
+clock-tree connectivity and placement. Clocks must be propagated. The default
+strategy visits buffers from clock sinks toward their roots; `top_down` reverses
+that order. Roots participate in both strategies.
+
+```tcl
+recover_clock_power \
+    [-buffers buffer_list] \
+    [-max_skew time] \
+    [-max_latency time] \
+    [-setup_margin time] \
+    [-hold_margin time] \
+    [-max_passes positive_integer] \
+    [-max_trials positive_integer] \
+    [-strategy bottom_up|top_down|bottom_up_batch] \
+    [-max_checkpoints integer] \
+    [-max_seconds seconds] \
+    [-max_timing_regression time] \
+    [-max_intermediate_timing_regression time] \
+    [-verbose]
+```
+
+Times use the current STA time unit. `-buffers` restricts replacement cells; it
+does not restrict the initial clock-buffer population. Without it, compatible
+buffer cells are discovered from the linked libraries. Replacements must have
+strictly smaller physical area, matching pin interfaces, site and height, and
+fit within the original placed footprint, including mirrored orientations.
+Widths must match the site grid, and replacements must preserve the original
+master's permitted orientation symmetries. Each configured scene must provide
+compatible named models for existing and replacement buffers. A library-qualified
+replacement selects its physical master and uses that master's linked cell,
+including its don't-use status.
+Fixed and don't-touch instances, don't-touch nets and don't-use replacement
+cells are protected.
+
+For the serial strategies, every trial updates parasitics and timing. A
+replacement is accepted only if it
+strictly reduces the native STA Clock-group total power (internal, switching and
+leakage) in the command scene, and satisfies all configured scenes. Clock
+latency excludes source latency and edge phase; skew combines the earliest and
+latest sink latency within each clock, scene, source-transition and
+sink-transition group. Disappearing groups are rejected; initially unavailable
+checks are reported. Omitted latency/skew
+limits preserve each starting envelope; supplied absolute limits must already
+be satisfied by the initial design.
+
+For the serial strategies, setup and hold margins default to zero. Each scene's worst constrained slack
+must remain above the smaller of its starting slack and requested margin.
+Missing constrained endpoints are reported as unavailable. Per-pin, scene and
+transition slew/capacitance checks prevent introducing or worsening violations.
+Rejected trials use the resizer ECO journal; a final full check protects the
+accepted result. No repair, buffering or placement pass runs inside the command.
+
+The default `-max_passes` is 5. Each pass tries smaller candidates in increasing
+area order and stops at the first accepted candidate for each buffer. The
+command stops when a pass makes no change, or reaches the pass limit. It returns
+the number of distinct changed buffers and reports initial/final clock power,
+trial and STA-evaluation counts, runtime and stop reason. Full-design STA and
+power checks make runtime proportional to passes, buffers, candidates and the
+cost of a complete feasibility evaluation.
+
+`-max_trials` limits the number of speculative candidate replacements across
+all passes. It defaults to unlimited; an explicit value must be a positive
+integer. When the limit prevents another trial, the command retains accepted
+changes, runs its final feasibility and power check, and reports stop reason
+`max_trials`. Metric snapshots do not count toward this limit. All strategies use the same replacement bound.
+
+The opt-in `bottom_up_batch` strategy proposes many downsizings together and
+checks complete batches with native timing, per-pin electrical checks and
+Clock-group power. Its timing allowances are independent, cumulative limits
+relative to the original command-start metrics. They do not reset after an
+accepted move or checkpoint, and losses in different metrics are not added.
+
+`-max_timing_regression` sets the final allowance `B`. By default, `B` is half
+the intrinsic delay of the smallest physical-area compatible ordinary buffer
+master, with cell-name ties. This reference is independent of `-buffers` and
+may be marked don't-use because characterization does not insert it. Every
+configured scene must have a compatible named model. Intrinsic delay is the
+minimum native gate delay across all scenes, min/max analysis points,
+transitions and buffer timing arcs at zero input slew and zero external load.
+Every characterized delay must be finite and positive; otherwise the command
+warns and uses zero. An explicit numeric allowance bypasses characterization.
+The command reports its reference, characterization definition and actual
+allowances once.
+
+`-max_intermediate_timing_regression` sets the exploration allowance `I`, which
+defaults to twice `B` and must be at least `B`. Both flags use the current STA
+time unit, accept zero, and require `-strategy bottom_up_batch`. Explicit zero
+preserves each starting timing metric, including positive worst slack; it does
+not grant the positive-slack headroom used by the serial strategies.
+
+For each clock/scene/source-transition/sink-transition group, the final latency
+upper bound is the smaller of starting maximum latency plus `B` and an explicit
+`-max_latency`, if supplied. The final skew bound is the smaller of starting
+skew plus `B` and an explicit `-max_skew`. Supplied absolute limits must already
+hold at command start. Each scene's final setup and hold worst slack must remain
+at least its starting value minus `B`. An explicitly supplied setup or hold
+margin adds the serial floor, the smaller of starting slack and that margin;
+the stricter floor applies. Omitted batch margins add no floor, so a small
+worsening of an existing negative slack is permitted within `B`.
+
+Intermediate limits use the same command-start metrics with allowance `I`.
+Explicit final absolute clock limits and margin floors are relaxed by `I-B`
+during exploration. Proposal projection, protected clock paths, inner timing
+checks, checkpoint validation and violation diagnostics all use these same
+intermediate limits. Electrical limits remain hard throughout: no new or
+worsened slew/capacitance violation is allowed beyond recomputation tolerance.
+
+Proposals use area, child input-capacitance changes and Liberty delay/slew
+projection with fixed wire delays. The local search starts with the smallest
+compatible candidates and advances to larger candidates when projected clock
+envelopes or Liberty capacitance/slew limits fail. Each round recomputes combined
+child loads, arrival/slew changes and complete group extrema before checking
+skew. These proposal rounds perform no design edits, STA updates or native power
+queries. Activities and the power objective remain owned by STA.
+
+Constituent replacements use nested ECO journals. After incremental parasitic
+and timing updates, native setup/hold checks run in every scene. A local native
+electrical check then covers the resized buffer, its input-net drivers and all
+pins with an initially negative slew margin. Limits are recomputed for the
+current cells, including newly applicable constraints. Exact clock paths are
+read at the cached union of initially clocked and unclocked sequential clock
+pins, preserving group membership and the same normalized latency metric as the
+full snapshot. These inner checks read no power and perform no global electrical
+scan. Failed trials restore their entire inner journal.
+
+When an accepted tentative prefix still meets final timing but the next
+otherwise admissible move would leave the final window, the command defers that
+move and fully certifies the prefix. The next wave can explore beyond that
+saved checkpoint. An empty prefix can cross the final window immediately because
+the baseline or previous checkpoint is already saved. Boundary deferrals are
+counted separately from infeasible trials and consume the ordinary trial budget.
+
+Every outer checkpoint checks all clock sinks, all scenes, all relevant per-pin
+electrical constraints and finite native clock power. A checkpoint satisfying
+intermediate timing and electrical limits may advance exploration even if power
+increases or final timing is exceeded. A separate best state starts at the
+baseline and updates only when final timing and electrical limits hold and
+native power improves beyond numerical tolerance. At exit, the command reverses
+all accepted history after that best checkpoint, verifies the restored masters,
+and consumes the reserved full final certificate. It returns the number of
+buffers whose actual final masters differ from command start. If no qualifying
+improvement was found, it returns the validated baseline. A deadline or exhausted
+trial/checkpoint budget never returns an exploratory state.
+
+Proposals are ranked by command-start cached native instance power, area and
+input-capacitance savings, with deterministic depth/name ties. These values are
+proposal weights and are never refreshed after an edit. A batch permits at most
+512 tentative accepts and two ranked scans. Each node tries its proposed size
+and the next-larger compatible size; its third attempt selects the remaining
+strictly smaller compatible cell with the lowest predicted delay/slew
+degradation across scenes and transitions. The second scan can benefit from
+child load relief. Failed outer checkpoints accumulate blocked clock ancestry
+and nearby load coupling for bounded revisions. Clock diagnostics select actual
+violating or extremal paths.
+
+When an intermediate clock limit has no headroom, the command protects its
+current certified early/late paths, including generated-clock source and master
+ancestry. Immediate children retain their input capacitances. Changed paths use
+a proposal guardband of the larger of 10 ps and 1% of the original group range.
+Projected early-window violations freeze affected ancestry and immediate
+children because load relief can accelerate a path. These heuristics do not
+replace native acceptance checks.
+
+Batch recovery supports ordinary non-inverting clock-buffer islands. Fixed
+buffers can act as modeled anchors. The first buffer after a primary source or
+unsupported cell retains its input capacitance. Unsupported logic and generated
+clock source boundaries exclude affected ancestry; excluded buffers are
+reported. Unconnected CTS dummy loads retain their native input capacitance.
+Physical/model compatibility is cached, including equivalent timing arcs, and
+each placed footprint is checked separately.
+
+`-max_checkpoints` defaults to 6 and must be at least 2. It bounds full native
+snapshots, including baseline, rejected proposals and final validation. Native
+full power calls cannot exceed this bound. Two checkpoints allow only baseline
+and final validation. `-max_passes` bounds proposal waves and `-max_trials`
+counts every attempted constituent replacement, including rejected and deferred
+moves. Inner checks do not consume full checkpoints.
+
+`-max_seconds` defaults to 300 wall-clock seconds, independently of STA units.
+The scan reserves 2.5 times the measured baseline validation cost for outer and
+final certification. This is a soft limit: native calls are uninterruptible,
+and restoration and final validation always run. Checkpoint/runtime options also
+require `-strategy bottom_up_batch`; serial strategies retain their behavior.
+The summary distinguishes exploratory batches, best updates, retained history,
+restored suffixes and boundary deferrals, and reports projection, WNS, cached
+clock and local electrical counters/times plus the watched slew-pin count.
+Stop reasons include `max_checkpoints`, `max_seconds`, `max_trials`,
+`max_passes` and `no_improving_batch`.
+
+
 ### Repair Timing
 
 The `repair_timing` command repairs setup and hold violations.  It

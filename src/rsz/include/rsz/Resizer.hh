@@ -420,6 +420,23 @@ class Resizer : public sta::dbStaState, public sta::dbNetworkObserver
                     bool match_cell_footprint,
                     bool verbose);
 
+  int recoverClockPower(const sta::LibertyCellSeq& buffers,
+                        float max_skew,
+                        float max_latency,
+                        float setup_margin,
+                        float hold_margin,
+                        int max_passes,
+                        bool top_down,
+                        bool verbose,
+                        int max_trials = 0,
+                        bool batch = false,
+                        int max_checkpoints = 6,
+                        double max_seconds = 300,
+                        float max_timing_regression = -1,
+                        float max_intermediate_timing_regression = -1,
+                        bool setup_margin_given = false,
+                        bool hold_margin_given = false);
+
   ////////////////////////////////////////////////////////////////
   void swapArithModules(int path_count,
                         const std::string& target,

@@ -37,6 +37,7 @@ cc_library(
         "src/PathGroupFilter.hh",
         "src/PreChecks.cc",
         "src/Rebuffer.cc",
+        "src/RecoverClockPower.cc",
         "src/RecoverPower.cc",
         "src/RecoverPower.hh",
         "src/RepairDesign.cc",
