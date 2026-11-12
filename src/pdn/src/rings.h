@@ -67,6 +67,9 @@ class Rings : public GridComponent
   bool allow_outside_die_ = false;
 
   void checkDieArea() const;
+  void checkGroupShape(const Shape& shape,
+                       const Region& domain,
+                       int spacing) const;
   // X and Y overrun of the ring past the die, per side of the core
   std::pair<int, int> getDieAreaDeficit(const Region& die_area,
                                         const Region& ring_outline) const;

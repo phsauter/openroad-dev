@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
+#include <functional>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "PdnTest.h"
 #include "connect.h"
+#include "grid.h"
 #include "pdn/PdnGen.hh"
 #include "rings.h"
 #include "straps.h"
@@ -68,13 +73,50 @@ class TestMacroGroup : public PdnTest
     return inst;
   }
 
-  std::unique_ptr<Rings> rings(InstanceGrid& grid)
+  std::unique_ptr<Rings> rings(InstanceGrid& grid, bool single_layer = false)
   {
     auto ring = std::make_unique<Rings>(
-        &grid, Rings::Layer{m1_, 100, 100}, Rings::Layer{m2_, 100, 100});
+        &grid,
+        Rings::Layer{m1_, 100, 100},
+        Rings::Layer{single_layer ? m1_ : m2_, 100, 100});
     ring->setOffset({200, 200, 200, 200});
     ring->makeShapes({});
     return ring;
+  }
+
+  odb::dbInst* placeRect(const char* name, const odb::Rect& rect)
+  {
+    const std::string master_name = std::string(name) + "_master";
+    auto* master = tst::makeMaster(db_->findLib("lib"),
+                                   master_name.c_str(),
+                                   rect.dx(),
+                                   rect.dy(),
+                                   {{.name = "VDD",
+                                     .layer = m1_,
+                                     .rect = odb::Rect(0, 100, rect.dx(), 200),
+                                     .sig_type = odb::dbSigType::POWER},
+                                    {.name = "VSS",
+                                     .layer = m1_,
+                                     .rect = odb::Rect(0, 300, rect.dx(), 400),
+                                     .sig_type = odb::dbSigType::GROUND}},
+                                   odb::dbMasterType::BLOCK);
+    auto* inst = odb::dbInst::create(block(), master, name);
+    inst->setLocation(rect.xMin(), rect.yMin());
+    inst->setPlacementStatus(odb::dbPlacementStatus::FIRM);
+    inst->findITerm("VDD")->connect(power_);
+    inst->findITerm("VSS")->connect(ground_);
+    return inst;
+  }
+
+  void expectPdnError(const std::string& code,
+                      const std::function<void()>& action)
+  {
+    try {
+      action();
+      FAIL() << "Expected " << code;
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string(error.what()).find(code), std::string::npos);
+    }
   }
 
   Grid* owner(odb::dbInst* inst) const
@@ -104,6 +146,147 @@ class TestMacroGroup : public PdnTest
   odb::dbNet* power_ = nullptr;
   odb::dbNet* ground_ = nullptr;
 };
+
+class TestMacroGroupUOpening
+    : public TestMacroGroup,
+      public testing::WithParamInterface<std::pair<int, bool>>
+{
+};
+
+TEST_P(TestMacroGroupUOpening, RingGapThresholds)
+{
+  const auto [width, rejects] = GetParam();
+  auto* base = placeRect("base", odb::Rect(2000, 2000, 10000, 4000));
+  auto* left = placeRect("left", odb::Rect(2000, 4000, 4000, 10000));
+  auto* right = placeRect("right", odb::Rect(4000 + width, 4000, 10000, 10000));
+  InstanceGrid group(domain_, "group", true, {base, left, right}, {});
+  if (rejects) {
+    expectPdnError("PDN-0246", [&] { rings(group); });
+  } else {
+    auto ring = rings(group);
+    EXPECT_FALSE(ring->getShapes().at(m1_).empty());
+    EXPECT_FALSE(ring->getShapes().at(m2_).empty());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(RingWidths,
+                         TestMacroGroupUOpening,
+                         testing::Values(std::pair{350, false},
+                                         std::pair{400, false},
+                                         std::pair{405, true},
+                                         std::pair{650, true},
+                                         std::pair{700, false},
+                                         std::pair{795, false},
+                                         std::pair{800, false},
+                                         std::pair{805, true},
+                                         std::pair{1000, true},
+                                         std::pair{1095, true},
+                                         std::pair{1100, false},
+                                         std::pair{1105, false}));
+
+TEST_F(TestMacroGroup, RejectsClosedRingHole)
+{
+  auto* left = placeRect("left", odb::Rect(2000, 2000, 4000, 10000));
+  auto* right = placeRect("right", odb::Rect(8000, 2000, 10000, 10000));
+  auto* bottom = placeRect("bottom", odb::Rect(4000, 2000, 8000, 4000));
+  auto* top = placeRect("top", odb::Rect(4000, 8000, 8000, 10000));
+  InstanceGrid group(domain_, "closed", true, {left, right, bottom, top}, {});
+  expectPdnError("PDN-0245", [&] { rings(group); });
+}
+
+TEST_F(TestMacroGroup, RingOffsetCannotSealOpenHole)
+{
+  auto* left = placeRect("left", odb::Rect(2000, 2000, 4000, 10000));
+  auto* bottom = placeRect("bottom", odb::Rect(4000, 2000, 10000, 4000));
+  auto* top = placeRect("top", odb::Rect(4000, 8000, 10000, 10000));
+  auto* bottom_right
+      = placeRect("bottom_right", odb::Rect(8000, 4000, 10000, 5850));
+  auto* top_right = placeRect("top_right", odb::Rect(8000, 6150, 10000, 8000));
+  InstanceGrid group(domain_,
+                     "offset_closed",
+                     true,
+                     {left, bottom, top, bottom_right, top_right},
+                     {});
+  try {
+    rings(group);
+    FAIL() << "Expected PDN-0245 or PDN-0246";
+  } catch (const std::runtime_error& error) {
+    const std::string message = error.what();
+    EXPECT_TRUE(message.find("PDN-0245") != std::string::npos
+                || message.find("PDN-0246") != std::string::npos);
+  }
+}
+
+TEST_F(TestMacroGroup, RejectsNarrowInwardStep)
+{
+  auto* lower = placeRect("lower", odb::Rect(2000, 2000, 10000, 6000));
+  auto* upper = placeRect("upper", odb::Rect(2000, 6000, 9995, 10000));
+  InstanceGrid group(domain_, "step", true, {lower, upper}, {});
+  expectPdnError("PDN-0246", [&] { rings(group); });
+}
+
+TEST_F(TestMacroGroup, RejectsTouchingWallsWithZeroConfiguredSpacing)
+{
+  auto* base = placeRect("base", odb::Rect(2000, 2000, 10000, 4000));
+  auto* left = placeRect("left", odb::Rect(2000, 4000, 4000, 10000));
+  auto* right = placeRect("right", odb::Rect(4600, 4000, 10000, 10000));
+  InstanceGrid group(domain_, "zero_spacing", true, {base, left, right}, {});
+  Rings ring(&group, Rings::Layer{m1_, 100, 0}, Rings::Layer{m2_, 100, 0});
+  ring.setOffset({200, 200, 200, 200});
+  expectPdnError("PDN-0246", [&] { ring.makeShapes({}); });
+}
+
+TEST_F(TestMacroGroup, RejectsGroupRingSegmentsBelowMinimumArea)
+{
+  m1_->setArea(40000);
+  auto* base = placeRect("base", odb::Rect(2000, 2000, 10000, 4000));
+  auto* left = placeRect("left", odb::Rect(2000, 4000, 4000, 10000));
+  auto* right = placeRect("right", odb::Rect(5100, 4000, 10000, 10000));
+  InstanceGrid group(domain_, "minimum_area", true, {base, left, right}, {});
+  expectPdnError("PDN-0248", [&] { rings(group); });
+}
+
+TEST_F(TestMacroGroup, SingleLayerCoreRingIgnoresPadConnectionInstances)
+{
+  block()->setCoreArea(odb::Rect(3000, 3000, 9000, 9000));
+  auto* pad_a = place("pad_a", 4000, 0);
+  auto* pad_b = place("pad_b", 4000, 10000);
+  CoreGrid core(domain_, "core", true, {});
+  auto net_to_pin_count = std::make_shared<odb::PtrMap<odb::dbNet, int>>();
+  for (auto* pad : {pad_a, pad_b}) {
+    core.addStrap(std::make_unique<PadDirectConnectionStraps>(
+        &core, pad->findITerm("VDD"), std::vector{m1_}, net_to_pin_count));
+  }
+  ASSERT_EQ(core.getInstances().size(), 2u);
+  Rings ring(&core, Rings::Layer{m1_, 100, 100}, Rings::Layer{m1_, 100, 100});
+  ring.setOffset({200, 200, 200, 200});
+  EXPECT_NO_THROW(ring.makeShapes({}));
+  EXPECT_EQ(ring.getShapes().at(m1_).size(), 8u);
+}
+
+TEST_F(TestMacroGroup, CornerOnlyMembersUseRectangularFallback)
+{
+  auto* lower = placeRect("lower", odb::Rect(2000, 2000, 4000, 4000));
+  auto* upper = placeRect("upper", odb::Rect(4000, 4000, 6000, 6000));
+  InstanceGrid group(domain_, "corners", true, {lower, upper}, {});
+  EXPECT_EQ(group.getDomainArea(), odb::Rect(2000, 2000, 6000, 6000));
+  EXPECT_EQ(group.getDomainRegion().getEdges().size(), 4u);
+  auto ring = rings(group);
+  EXPECT_EQ(ring->getShapes().at(m1_).size(), 4u);
+  EXPECT_EQ(ring->getShapes().at(m2_).size(), 4u);
+}
+
+TEST_F(TestMacroGroup, RejectsSingleLayerRingForGroupButKeepsSingleton)
+{
+  auto* a = place("a", 2000, 2000);
+  auto* b = place("b", 6000, 2000);
+  InstanceGrid group(domain_, "group", true, std::vector{a, b}, {});
+  expectPdnError("PDN-0247", [&] { rings(group, true); });
+
+  InstanceGrid singleton(domain_, "single", true, a, {});
+  auto ring = rings(singleton, true);
+  EXPECT_FALSE(ring->getShapes().at(m1_).empty());
+}
 
 TEST_F(TestMacroGroup, SeparatedMembersHaveOneRectangularPerimeter)
 {

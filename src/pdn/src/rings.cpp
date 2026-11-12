@@ -211,6 +211,46 @@ odb::Rect Rings::getInnerRingRect() const
   return getInnerRingOutline().getEnclosingRect();
 }
 
+void Rings::checkGroupShape(const Shape& shape,
+                            const Region& domain,
+                            const int spacing) const
+{
+  const odb::Rect& rect = shape.getRect();
+  auto* layer = shape.getLayer();
+  if (!Region(rect).intersect(domain).isEmpty()) {
+    getLogger()->error(utl::PDN,
+                       245,
+                       "Ring for macro group {} on layer {} overlaps the group "
+                       "domain. Use separate groups or adjust the ring offset.",
+                       getGrid()->getName(),
+                       layer->getName());
+  }
+
+  const auto& shapes = getShapes();
+  const auto layer_shapes = shapes.find(layer);
+  if (layer_shapes == shapes.end()) {
+    return;
+  }
+  odb::Rect search_rect;
+  rect.bloat(spacing, search_rect);
+  const auto& tree = layer_shapes->second;
+  for (auto it = tree.qbegin(bgi::intersects(search_rect)); it != tree.qend();
+       ++it) {
+    const Shape& other = **it;
+    const odb::Rect& other_rect = other.getRect();
+    const double distance = boost::geometry::distance(rect, other_rect);
+    if (distance == 0 || distance < spacing) {
+      getLogger()->error(utl::PDN,
+                         246,
+                         "Ring for macro group {} on layer {} has overlapping "
+                         "or insufficiently spaced shapes. Adjust the group "
+                         "notch or ring width.",
+                         getGrid()->getName(),
+                         layer->getName());
+    }
+  }
+}
+
 void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
 {
   debugPrint(getLogger(),
@@ -223,6 +263,16 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
   clearShapes();
 
   auto* grid = getGrid();
+  const bool macro_group
+      = grid->type() == Grid::kInstance && grid->getInstances().size() > 1;
+  if (macro_group && layer0_.layer == layer1_.layer) {
+    getLogger()->error(utl::PDN,
+                       247,
+                       "Single-layer rings are unsupported for macro group {}. "
+                       "Use separate groups or distinct ring layers.",
+                       grid->getName());
+  }
+  const Region domain = macro_group ? grid->getDomainRegion() : Region();
 
   const auto nets = getNets();
 
@@ -339,8 +389,22 @@ void Rings::makeShapes(const Shape::ShapeTreeMap& other_shapes)
             rect.set_yhi(rect.yMax() + extend_high);
           }
 
-          addShape(std::make_unique<Shape>(
-              layer, net, rect, odb::dbWireShapeType::RING));
+          auto shape = std::make_unique<Shape>(
+              layer, net, rect, odb::dbWireShapeType::RING);
+          if (macro_group) {
+            // Insertion can merge or discard conflicts, so reject them first.
+            checkGroupShape(*shape, domain, layer_def->spacing);
+          }
+          const auto added = addShape(std::move(shape));
+          if (macro_group && added == nullptr) {
+            getLogger()->error(utl::PDN,
+                               248,
+                               "Unable to form a legal ring segment for macro "
+                               "group {} on layer {}. Adjust the ring width or "
+                               "group outline.",
+                               grid->getName(),
+                               layer->getName());
+          }
         }
       }
     }
